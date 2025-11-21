@@ -1,0 +1,1013 @@
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { initializeApp } from 'firebase/app';
+import { 
+    getAuth, 
+    signInWithEmailAndPassword, 
+    createUserWithEmailAndPassword, 
+    signOut, 
+    onAuthStateChanged 
+} from 'firebase/auth';
+import { 
+    getFirestore, collection, doc, setDoc, addDoc, getDoc, 
+    query, onSnapshot, where, serverTimestamp, runTransaction, 
+    deleteDoc, getDocs, setLogLevel 
+} from 'firebase/firestore';
+import { Settings, Users, Briefcase, ListTodo, ClipboardList, Zap, BarChart3, User, LogOut, ArrowLeft, Plus, Check, Building, Trash2, Pencil, X, Calendar as CalendarIcon, Flag, AlertTriangle, Lock, Mail } from 'lucide-react';
+
+// Variáveis globais de ambiente
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'sistema-avaliacao-pautas';
+
+// Configuração do Firebase fornecida pelo usuário
+const userFirebaseConfig = {
+  apiKey: "AIzaSyBZ76yd8RbRQVjbJ115QqL3oDztxedq0OY",
+  authDomain: "agmm-16a91.firebaseapp.com",
+  projectId: "agmm-16a91",
+  storageBucket: "agmm-16a91.firebasestorage.app",
+  messagingSenderId: "784096179999",
+  appId: "1:784096179999:web:239ebaf0547bd88e24622a",
+  measurementId: "G-B56XH56SLB"
+};
+
+// Usa a config do ambiente se existir, senão usa a fornecida
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : userFirebaseConfig;
+
+// =========================================================================
+// FIREBASE & UTILS SETUP
+// =========================================================================
+
+let app, db, auth;
+setLogLevel('silent'); // Reduzi o log para limpar o console
+
+const getPublicCollectionPath = (collectionName) => {
+    return `artifacts/${appId}/public/data/${collectionName}`;
+};
+
+const formatDate = (data) => {
+    if (!data) return 'N/A';
+    if (data.toDate) { 
+        return data.toDate().toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+    }
+    try {
+        const [year, month, day] = data.split('-');
+        return `${day}/${month}/${year}`;
+    } catch {
+        return 'N/A';
+    }
+};
+
+// =========================================================================
+// UI COMPONENTS
+// =========================================================================
+
+const Card = ({ children, title, icon: Icon, className = "" }) => (
+    <div className={`bg-white p-6 rounded-xl shadow-lg border border-gray-100 transition-all hover:shadow-xl ${className}`}>
+        {title && (
+            <h2 className="flex items-center text-xl font-bold text-gray-800 mb-4 border-b pb-2">
+                {Icon && <Icon className="w-5 h-5 mr-2 text-indigo-600" />}
+                {title}
+            </h2>
+        )}
+        {children}
+    </div>
+);
+
+const Button = ({ children, onClick, disabled = false, icon: Icon, type = "primary", className = "" }) => {
+    const baseClasses = "flex items-center justify-center px-4 py-2 font-semibold rounded-lg transition-all duration-200 shadow-md disabled:opacity-50 disabled:cursor-not-allowed";
+    let colorClasses = "";
+
+    switch (type) {
+        case 'secondary':
+            colorClasses = "bg-gray-200 text-gray-700 hover:bg-gray-300";
+            break;
+        case 'danger':
+            colorClasses = "bg-red-500 text-white hover:bg-red-600";
+            break;
+        default: // primary
+            colorClasses = "bg-indigo-600 text-white hover:bg-indigo-700";
+            break;
+    }
+
+    return (
+        <button onClick={onClick} disabled={disabled} className={`${baseClasses} ${colorClasses} ${className}`}>
+            {Icon && <Icon className="w-5 h-5 mr-2" />}
+            {children}
+        </button>
+    );
+};
+
+const Input = ({ label, type = "text", value, onChange, placeholder = "", min, max, required = false, className = "" }) => (
+    <div className="mb-4">
+        <label className="block text-sm font-medium text-gray-600 mb-1">{label} {required && <span className="text-red-500">*</span>}</label>
+        <input
+            type={type}
+            value={value || ''}
+            onChange={onChange}
+            placeholder={placeholder}
+            min={min}
+            max={max}
+            required={required}
+            className={`w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 ${className}`}
+        />
+    </div>
+);
+
+const MonthSelector = ({ selectedMonth, setSelectedMonth }) => (
+    <div className="flex items-center space-x-2">
+        <label htmlFor="month-select" className="text-sm font-medium text-gray-700">Filtrar Mês:</label>
+        <input
+            type="month"
+            id="month-select"
+            value={selectedMonth}
+            onChange={(e) => setSelectedMonth(e.target.value)}
+            className="px-3 py-1.5 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
+        />
+    </div>
+);
+
+// =========================================================================
+// AUTH COMPONENTS
+// =========================================================================
+
+const LoginScreen = ({ onLoginSuccess }) => {
+    const [isRegistering, setIsRegistering] = useState(false);
+    const [email, setEmail] = useState('');
+    const [password, setPassword] = useState('');
+    const [name, setName] = useState('');
+    const [error, setError] = useState('');
+    const [loading, setLoading] = useState(false);
+
+    const handleAuth = async (e) => {
+        e.preventDefault();
+        setError('');
+        setLoading(true);
+
+        try {
+            if (isRegistering) {
+                // Registro
+                const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+                const user = userCredential.user;
+                
+                // Cria o perfil do usuário no Firestore com permissões básicas
+                await setDoc(doc(db, getPublicCollectionPath('funcionarios'), user.uid), {
+                    id: user.uid,
+                    nome: name,
+                    email: email,
+                    isAdmin: false, // Padrão: Não é admin
+                    cargoId: '', // Será definido pelo admin
+                    clienteIds: [],
+                    timestamp: serverTimestamp()
+                });
+            } else {
+                // Login
+                await signInWithEmailAndPassword(auth, email, password);
+            }
+            // O observador onAuthStateChanged no App lidará com o resto
+        } catch (err) {
+            console.error("Erro de autenticação:", err);
+            let msg = "Erro ao autenticar. Verifique suas credenciais.";
+            if (err.code === 'auth/email-already-in-use') msg = "Este e-mail já está em uso.";
+            if (err.code === 'auth/weak-password') msg = "A senha deve ter pelo menos 6 caracteres.";
+            if (err.code === 'auth/invalid-credential') msg = "E-mail ou senha incorretos.";
+            setError(msg);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    return (
+        <div className="min-h-screen flex items-center justify-center bg-indigo-50 p-4">
+            <Card className="w-full max-w-md">
+                <div className="text-center mb-6">
+                    <div className="bg-indigo-100 p-3 rounded-full w-16 h-16 flex items-center justify-center mx-auto mb-4">
+                        <Lock className="w-8 h-8 text-indigo-600" />
+                    </div>
+                    <h1 className="text-2xl font-bold text-gray-800">Sistema de Pautas</h1>
+                    <p className="text-gray-500 text-sm mt-1">Acesse sua conta para continuar</p>
+                </div>
+
+                <form onSubmit={handleAuth}>
+                    {isRegistering && (
+                        <Input 
+                            label="Nome Completo" 
+                            placeholder="Ex: João Silva" 
+                            value={name} 
+                            onChange={(e) => setName(e.target.value)} 
+                            required 
+                        />
+                    )}
+                    <Input 
+                        label="E-mail" 
+                        type="email" 
+                        placeholder="seu@email.com" 
+                        value={email} 
+                        onChange={(e) => setEmail(e.target.value)} 
+                        required 
+                    />
+                    <Input 
+                        label="Senha" 
+                        type="password" 
+                        placeholder="******" 
+                        value={password} 
+                        onChange={(e) => setPassword(e.target.value)} 
+                        required 
+                    />
+
+                    {error && <p className="text-red-500 text-sm mb-4 text-center">{error}</p>}
+
+                    <Button type="primary" className="w-full mb-3" disabled={loading}>
+                        {loading ? 'Processando...' : (isRegistering ? 'Criar Conta' : 'Entrar')}
+                    </Button>
+                </form>
+
+                <div className="text-center mt-4">
+                    <button 
+                        onClick={() => { setIsRegistering(!isRegistering); setError(''); }}
+                        className="text-sm text-indigo-600 hover:underline"
+                    >
+                        {isRegistering ? 'Já tem uma conta? Faça Login' : 'Não tem conta? Cadastre-se'}
+                    </button>
+                </div>
+            </Card>
+        </div>
+    );
+};
+
+// =========================================================================
+// DASHBOARD COMPONENTS
+// =========================================================================
+
+const getScoreColor = (score) => {
+    if (score >= 90) return 'text-green-600 bg-green-100';
+    if (score >= 75) return 'text-yellow-600 bg-yellow-100';
+    return 'text-red-600 bg-red-100';
+};
+
+const RankingChart = ({ data }) => {
+    if (data.length === 0) return <p className="text-gray-500 italic">Sem dados de desempenho para ranking.</p>;
+
+    return (
+        <div className="space-y-4">
+            {data.map((f, index) => (
+                <div key={f.id} className="p-3 bg-gray-50 rounded-lg shadow-sm">
+                    <div className="flex justify-between items-center mb-1">
+                        <span className="text-sm font-medium text-gray-800">{index + 1}. {f.nome}</span>
+                        <span className={`text-xs font-bold px-2 py-0.5 rounded ${getScoreColor(f.scoreGeral)}`}>
+                            {f.scoreGeral}%
+                        </span>
+                    </div>
+                    <div className="w-full bg-gray-200 rounded-full h-2.5 relative">
+                        <div className={`h-2.5 rounded-full ${f.scoreGeral >= 90 ? 'bg-green-500' : f.scoreGeral >= 75 ? 'bg-yellow-500' : 'bg-red-500'}`} style={{ width: `${f.scoreGeral}%` }}></div>
+                        {f.totalPenalidades > 0 && (
+                             <div className="absolute -top-1 right-0 text-xs text-red-600 font-bold flex items-center">
+                                <Flag className="w-3 h-3 mr-1" /> -{f.totalPenalidades}
+                             </div>
+                        )}
+                    </div>
+                    <p className="text-xs text-gray-500 mt-1 flex justify-between">
+                        <span>{f.totalPontosAtribuidos} pts válidos</span>
+                    </p>
+                </div>
+            ))}
+        </div>
+    );
+};
+
+const DashboardContent = ({ cargos, funcionarios, atividadesBase, lancamentos, clientes, bandeiras }) => {
+    const dashboardData = useMemo(() => {
+        const data = funcionarios.map(f => ({
+            ...f,
+            cargoNome: cargos.find(c => c.id === f.cargoId)?.nome || 'N/A',
+            clienteNome: f.clienteIds && f.clienteIds.length > 0
+                ? f.clienteIds.map(id => clientes.find(c => c.id === id)?.nome).filter(Boolean).join(', ')
+                : 'Interno',
+            totalPontosAtribuidos: 0,
+            totalPontosMaximos: 0,
+            lancamentosValidados: 0,
+            totalPenalidades: 0,
+            performancePorAtividade: {} 
+        }));
+
+        lancamentos.filter(l => l.status === 'Validado').forEach(l => {
+            const funcIndex = data.findIndex(d => d.id === l.funcionarioId);
+            if (funcIndex === -1) return;
+
+            const atividadeBase = atividadesBase.find(a => a.id === l.atividadeBaseId);
+            const maxScore = atividadeBase?.pontuacaoMaxima || 1;
+            const ptsAtribuidos = l.pontuacaoAtribuida || 0;
+
+            data[funcIndex].totalPontosAtribuidos += ptsAtribuidos;
+            data[funcIndex].totalPontosMaximos += maxScore;
+            data[funcIndex].lancamentosValidados += 1;
+
+            const atividadeId = l.atividadeBaseId;
+            if (!data[funcIndex].performancePorAtividade[atividadeId]) {
+                data[funcIndex].performancePorAtividade[atividadeId] = {
+                    nome: atividadeBase?.nome || 'Desconhecida',
+                    ptsAtribuidos: 0,
+                    ptsMaximos: 0,
+                };
+            }
+            data[funcIndex].performancePorAtividade[atividadeId].ptsAtribuidos += ptsAtribuidos;
+            data[funcIndex].performancePorAtividade[atividadeId].ptsMaximos += maxScore;
+        });
+
+        bandeiras.forEach(b => {
+            const funcIndex = data.findIndex(d => d.id === b.funcionarioId);
+            if (funcIndex !== -1) {
+                data[funcIndex].totalPenalidades += 1;
+                data[funcIndex].totalPontosAtribuidos -= 1;
+            }
+        });
+
+        return data.map(d => {
+            const pontuacaoFinal = Math.max(0, d.totalPontosAtribuidos);
+            const score = d.totalPontosMaximos > 0 
+                ? ((pontuacaoFinal / d.totalPontosMaximos) * 100).toFixed(0)
+                : 0;
+
+            return {
+                ...d,
+                totalPontosAtribuidos: pontuacaoFinal,
+                scoreGeral: score,
+                performanceAtividades: Object.values(d.performancePorAtividade).map(pa => ({
+                    ...pa,
+                    score: pa.ptsMaximos > 0 ? ((pa.ptsAtribuidos / pa.ptsMaximos) * 100).toFixed(0) : 0
+                }))
+            };
+        }).sort((a, b) => b.scoreGeral - a.scoreGeral);
+    }, [funcionarios, cargos, atividadesBase, lancamentos, clientes, bandeiras]);
+
+    return (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <Card title="Ranking Geral" icon={BarChart3} className="md:col-span-1">
+                <RankingChart data={dashboardData} />
+            </Card>
+            <Card title="Detalhamento Individual" icon={Users} className="md:col-span-2">
+                <div className="space-y-6 max-h-[70vh] overflow-y-auto pr-2">
+                    {dashboardData.map(f => (
+                        <div key={f.id} className="p-4 border rounded-xl bg-white shadow-md">
+                            <div className="flex justify-between items-center mb-3 border-b pb-2">
+                                <span className="text-xl font-bold text-gray-800">{f.nome} ({f.cargoNome})</span>
+                                <span className={`text-2xl font-extrabold p-2 rounded-lg ${getScoreColor(f.scoreGeral)}`}>{f.scoreGeral}%</span>
+                            </div>
+                            <div className="flex flex-wrap gap-4 text-sm text-gray-600 mb-2">
+                                <span>Pontos Finais: <span className="font-semibold text-indigo-600">{f.totalPontosAtribuidos}</span> / {f.totalPontosMaximos}</span>
+                                <span>Lançamentos: {f.lancamentosValidados}</span>
+                                {f.totalPenalidades > 0 && (
+                                    <span className="text-red-600 font-bold flex items-center bg-red-50 px-2 py-0.5 rounded border border-red-100">
+                                        <Flag className="w-4 h-4 mr-1" /> {f.totalPenalidades} Bandeira(s)
+                                    </span>
+                                )}
+                            </div>
+                        </div>
+                    ))}
+                    {funcionarios.length === 0 && <div className="text-center p-6 text-gray-500">Nenhum funcionário.</div>}
+                </div>
+            </Card>
+        </div>
+    );
+};
+
+// =========================================================================
+// CALENDAR VIEW
+// =========================================================================
+
+const CalendarView = ({ db, userId, funcionarios, lancamentos, bandeiras, selectedMonth }) => {
+    const [selectedFuncionarioId, setSelectedFuncionarioId] = useState('');
+    const [flagModalOpen, setFlagModalOpen] = useState(false);
+    const [selectedDate, setSelectedDate] = useState(null);
+    const [flagReason, setFlagReason] = useState('');
+    const [loadingFlag, setLoadingFlag] = useState(false);
+
+    const getDaysInMonth = (year, month) => new Date(year, month + 1, 0).getDate();
+    const getFirstDayOfMonth = (year, month) => new Date(year, month, 1).getDay();
+
+    const year = parseInt(selectedMonth.split('-')[0]);
+    const month = parseInt(selectedMonth.split('-')[1]) - 1;
+    const daysInMonth = getDaysInMonth(year, month);
+    const firstDay = getFirstDayOfMonth(year, month);
+    const daysArray = Array.from({ length: daysInMonth }, (_, i) => i + 1);
+    const blanksArray = Array.from({ length: firstDay }, (_, i) => i);
+
+    const funcionarioLancamentos = useMemo(() => selectedFuncionarioId ? lancamentos.filter(l => l.funcionarioId === selectedFuncionarioId) : [], [lancamentos, selectedFuncionarioId]);
+    const funcionarioBandeiras = useMemo(() => selectedFuncionarioId ? bandeiras.filter(b => b.funcionarioId === selectedFuncionarioId) : [], [bandeiras, selectedFuncionarioId]);
+
+    const handleDayClick = (day) => {
+        if (!selectedFuncionarioId) return;
+        const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        const existingFlag = funcionarioBandeiras.find(b => b.data === dateStr);
+        if (existingFlag) {
+            if (window.confirm("Remover bandeira?")) deleteDoc(doc(db, getPublicCollectionPath('bandeiras'), existingFlag.id));
+        } else {
+            setSelectedDate(dateStr);
+            setFlagModalOpen(true);
+        }
+    };
+
+    const handleAddFlag = async () => {
+        if (!db || !selectedFuncionarioId || !selectedDate) return;
+        setLoadingFlag(true);
+        try {
+            await addDoc(collection(db, getPublicCollectionPath('bandeiras')), {
+                funcionarioId: selectedFuncionarioId,
+                data: selectedDate,
+                motivo: flagReason || 'Penalidade Administrativa',
+                criadoPor: userId,
+                timestamp: serverTimestamp()
+            });
+            setFlagModalOpen(false);
+            setFlagReason('');
+        } catch (error) {
+            console.error("Erro:", error);
+        } finally {
+            setLoadingFlag(false);
+        }
+    };
+
+    return (
+        <div className="space-y-6">
+            <Card title="Calendário e Penalidades" icon={CalendarIcon}>
+                <div className="mb-6">
+                    <label className="block text-sm font-medium text-gray-600 mb-2">Selecione o Funcionário</label>
+                    <select value={selectedFuncionarioId} onChange={(e) => setSelectedFuncionarioId(e.target.value)} className="w-full md:w-1/2 px-3 py-2 border border-gray-300 rounded-lg">
+                        <option value="">-- Selecione --</option>
+                        {funcionarios.map(f => <option key={f.id} value={f.id}>{f.nome}</option>)}
+                    </select>
+                </div>
+                {selectedFuncionarioId && (
+                    <div className="border rounded-lg overflow-hidden">
+                        <div className="grid grid-cols-7 bg-gray-100 border-b text-center py-2 text-xs text-gray-600">
+                            {['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'].map(d => <div key={d}>{d}</div>)}
+                        </div>
+                        <div className="grid grid-cols-7 bg-white">
+                            {blanksArray.map(b => <div key={`blank-${b}`} className="h-20 border-b border-r bg-gray-50"></div>)}
+                            {daysArray.map(day => {
+                                const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                                const hasLancamento = funcionarioLancamentos.some(l => l.dataConclusao === dateStr);
+                                const hasFlag = funcionarioBandeiras.find(b => b.data === dateStr);
+                                return (
+                                    <div key={day} onClick={() => handleDayClick(day)} className="h-20 border-b border-r p-1 cursor-pointer hover:bg-indigo-50">
+                                        <span className={`text-sm ${hasFlag ? 'text-red-600 font-bold' : 'text-gray-700'}`}>{day}</span>
+                                        <div className="flex flex-col gap-1 mt-1">
+                                            {hasLancamento && <div className="w-2 h-2 bg-green-500 rounded-full mx-auto" title="Demanda"></div>}
+                                            {hasFlag && <Flag className="w-4 h-4 text-red-500 mx-auto" />}
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                )}
+            </Card>
+            {flagModalOpen && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+                    <div className="bg-white p-6 rounded-xl w-full max-w-sm">
+                        <h3 className="text-lg font-bold text-red-600 mb-4">Adicionar Bandeira</h3>
+                        <Input label="Motivo" value={flagReason} onChange={(e) => setFlagReason(e.target.value)} />
+                        <div className="flex justify-end space-x-2 mt-4">
+                            <Button type="secondary" onClick={() => setFlagModalOpen(false)}>Cancelar</Button>
+                            <Button type="danger" onClick={handleAddFlag} disabled={loadingFlag}>Aplicar</Button>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+};
+
+// =========================================================================
+// CRUD FORMS (ADMIN VIEW)
+// =========================================================================
+
+const CargoForm = ({ db, userId, cargos }) => {
+    const [nome, setNome] = useState('');
+    const [loading, setLoading] = useState(false);
+    const [editingCargo, setEditingCargo] = useState(null);
+
+    const handleSubmit = async (e) => {
+        e.preventDefault();
+        if (!nome.trim()) return;
+        setLoading(true);
+        try {
+            if (editingCargo) {
+                await setDoc(doc(db, getPublicCollectionPath('cargos'), editingCargo.id), { ...editingCargo, nome: nome.trim() }, { merge: true });
+            } else {
+                await addDoc(collection(db, getPublicCollectionPath('cargos')), { nome: nome.trim(), criadoPor: userId, timestamp: serverTimestamp() });
+            }
+            setNome(''); setEditingCargo(null);
+        } catch (error) { console.error(error); } finally { setLoading(false); }
+    };
+
+    const handleDelete = async (id) => {
+        if (window.confirm("Excluir este cargo?")) await deleteDoc(doc(db, getPublicCollectionPath('cargos'), id));
+    };
+
+    return (
+        <Card title="Cargos" icon={Briefcase}>
+            <form onSubmit={handleSubmit} className="mb-4">
+                <Input value={nome} onChange={(e) => setNome(e.target.value)} placeholder="Nome do Cargo" required />
+                <div className="flex gap-2">
+                    <Button disabled={loading} className="w-full">{editingCargo ? 'Atualizar' : 'Adicionar'}</Button>
+                    {editingCargo && <Button type="secondary" onClick={() => { setEditingCargo(null); setNome(''); }} icon={X}>Cancelar</Button>}
+                </div>
+            </form>
+            <ul className="space-y-2 max-h-40 overflow-y-auto">
+                {cargos.map((cargo) => (
+                    <li key={cargo.id} className="flex justify-between items-center p-2 bg-gray-50 rounded-md text-sm">
+                        <span>{cargo.nome}</span>
+                        <div className="flex gap-1">
+                            <button onClick={() => { setEditingCargo(cargo); setNome(cargo.nome); }} className="text-blue-600"><Pencil className="w-4 h-4" /></button>
+                            <button onClick={() => handleDelete(cargo.id)} className="text-red-500"><Trash2 className="w-4 h-4" /></button>
+                        </div>
+                    </li>
+                ))}
+            </ul>
+        </Card>
+    );
+};
+
+const AtividadeBaseForm = ({ db, userId, cargos, atividadesBase }) => {
+    const [nome, setNome] = useState('');
+    const [cargoId, setCargoId] = useState('');
+    const [pontuacaoMaxima, setPontuacaoMaxima] = useState(1);
+    const [loading, setLoading] = useState(false);
+    const [editingAtividade, setEditingAtividade] = useState(null);
+
+    const handleSubmit = async (e) => {
+        e.preventDefault();
+        if (!nome.trim() || !cargoId) return;
+        setLoading(true);
+        const data = { nome: nome.trim(), cargoId, pontuacaoMaxima: Number(pontuacaoMaxima), criadoPor: userId };
+        try {
+            if (editingAtividade) {
+                await setDoc(doc(db, getPublicCollectionPath('atividadesBase'), editingAtividade.id), data, { merge: true });
+            } else {
+                await addDoc(collection(db, getPublicCollectionPath('atividadesBase')), { ...data, timestamp: serverTimestamp() });
+            }
+            setNome(''); setCargoId(''); setPontuacaoMaxima(1); setEditingAtividade(null);
+        } catch (error) { console.error(error); } finally { setLoading(false); }
+    };
+
+    const handleDelete = async (id) => {
+        if (window.confirm("Excluir atividade?")) await deleteDoc(doc(db, getPublicCollectionPath('atividadesBase'), id));
+    };
+
+    return (
+        <Card title="Atividades Base" icon={ListTodo}>
+            <form onSubmit={handleSubmit} className="mb-4">
+                <Input value={nome} onChange={(e) => setNome(e.target.value)} placeholder="Nome da Atividade" required />
+                <select value={cargoId} onChange={(e) => setCargoId(e.target.value)} className="w-full mb-4 px-3 py-2 border rounded-lg" required>
+                    <option value="">Selecione o Cargo</option>
+                    {cargos.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
+                </select>
+                <Input type="number" value={pontuacaoMaxima} onChange={(e) => setPontuacaoMaxima(e.target.value)} label="Peso" required />
+                <div className="flex gap-2">
+                    <Button disabled={loading} className="w-full">{editingAtividade ? 'Atualizar' : 'Adicionar'}</Button>
+                    {editingAtividade && <Button type="secondary" onClick={() => { setEditingAtividade(null); setNome(''); }} icon={X}>Cancelar</Button>}
+                </div>
+            </form>
+            <ul className="space-y-2 max-h-40 overflow-y-auto">
+                {atividadesBase.map((atv) => (
+                    <li key={atv.id} className="flex justify-between items-center p-2 bg-gray-50 rounded-md text-sm">
+                        <span>{atv.nome} (Max: {atv.pontuacaoMaxima})</span>
+                        <div className="flex gap-1">
+                            <button onClick={() => { setEditingAtividade(atv); setNome(atv.nome); setCargoId(atv.cargoId); setPontuacaoMaxima(atv.pontuacaoMaxima); }} className="text-blue-600"><Pencil className="w-4 h-4" /></button>
+                            <button onClick={() => handleDelete(atv.id)} className="text-red-500"><Trash2 className="w-4 h-4" /></button>
+                        </div>
+                    </li>
+                ))}
+            </ul>
+        </Card>
+    );
+};
+
+const ClienteForm = ({ db, userId, clientes }) => {
+    const [nome, setNome] = useState('');
+    const [loading, setLoading] = useState(false);
+    const [editingCliente, setEditingCliente] = useState(null);
+
+    const handleSubmit = async (e) => {
+        e.preventDefault();
+        if (!nome.trim()) return;
+        setLoading(true);
+        try {
+            if (editingCliente) {
+                await setDoc(doc(db, getPublicCollectionPath('clientes'), editingCliente.id), { ...editingCliente, nome: nome.trim() }, { merge: true });
+            } else {
+                await addDoc(collection(db, getPublicCollectionPath('clientes')), { nome: nome.trim(), criadoPor: userId, timestamp: serverTimestamp() });
+            }
+            setNome(''); setEditingCliente(null);
+        } catch (error) { console.error(error); } finally { setLoading(false); }
+    };
+
+    const handleDelete = async (id) => {
+        if (window.confirm("Excluir cliente?")) await deleteDoc(doc(db, getPublicCollectionPath('clientes'), id));
+    };
+
+    return (
+        <Card title="Clientes" icon={Building}>
+            <form onSubmit={handleSubmit} className="mb-4">
+                <Input value={nome} onChange={(e) => setNome(e.target.value)} placeholder="Nome do Cliente" required />
+                <div className="flex gap-2">
+                    <Button disabled={loading} className="w-full">{editingCliente ? 'Atualizar' : 'Adicionar'}</Button>
+                    {editingCliente && <Button type="secondary" onClick={() => { setEditingCliente(null); setNome(''); }} icon={X}>Cancelar</Button>}
+                </div>
+            </form>
+            <ul className="space-y-2 max-h-40 overflow-y-auto">
+                {clientes.map((cli) => (
+                    <li key={cli.id} className="flex justify-between items-center p-2 bg-gray-50 rounded-md text-sm">
+                        <span>{cli.nome}</span>
+                        <div className="flex gap-1">
+                            <button onClick={() => { setEditingCliente(cli); setNome(cli.nome); }} className="text-blue-600"><Pencil className="w-4 h-4" /></button>
+                            <button onClick={() => handleDelete(cli.id)} className="text-red-500"><Trash2 className="w-4 h-4" /></button>
+                        </div>
+                    </li>
+                ))}
+            </ul>
+        </Card>
+    );
+};
+
+// Formulário de Gestão de Usuários (ADMIN)
+const FuncionarioManagement = ({ db, userId, cargos, clientes, funcionarios }) => {
+    const [selectedUserId, setSelectedUserId] = useState('');
+    const [cargoId, setCargoId] = useState('');
+    const [clienteIds, setClienteIds] = useState([]);
+    const [isAdmin, setIsAdmin] = useState(false);
+    const [loading, setLoading] = useState(false);
+
+    const handleUserSelect = (uid) => {
+        setSelectedUserId(uid);
+        if (!uid) {
+            setCargoId(''); setClienteIds([]); setIsAdmin(false); return;
+        }
+        const f = funcionarios.find(u => u.id === uid);
+        if (f) {
+            setCargoId(f.cargoId || '');
+            setClienteIds(f.clienteIds || []);
+            setIsAdmin(f.isAdmin || false);
+        }
+    };
+
+    const handleClientToggle = (clientId) => {
+        setClienteIds(prev => prev.includes(clientId) ? prev.filter(id => id !== clientId) : [...prev, clientId]);
+    };
+
+    const handleSave = async () => {
+        if (!selectedUserId) return;
+        setLoading(true);
+        try {
+            await setDoc(doc(db, getPublicCollectionPath('funcionarios'), selectedUserId), {
+                cargoId,
+                clienteIds,
+                isAdmin
+            }, { merge: true });
+            alert("Permissões atualizadas com sucesso!");
+        } catch (err) {
+            console.error(err);
+            alert("Erro ao atualizar usuário.");
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    return (
+        <Card title="Gestão de Acessos e Funcionários" icon={Users}>
+            <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-600 mb-1">Selecione o Usuário Cadastrado</label>
+                <select 
+                    value={selectedUserId} 
+                    onChange={(e) => handleUserSelect(e.target.value)}
+                    className="w-full px-3 py-2 border rounded-lg"
+                >
+                    <option value="">-- Selecione um Usuário --</option>
+                    {funcionarios.map(f => (
+                        <option key={f.id} value={f.id}>{f.nome} ({f.email})</option>
+                    ))}
+                </select>
+            </div>
+
+            {selectedUserId && (
+                <div className="space-y-4 border-t pt-4">
+                    <div>
+                        <label className="block text-sm font-medium text-gray-600 mb-1">Nível de Acesso</label>
+                        <div className="flex items-center space-x-2">
+                            <input type="checkbox" checked={isAdmin} onChange={(e) => setIsAdmin(e.target.checked)} className="w-4 h-4" />
+                            <span>Administrador do Sistema</span>
+                        </div>
+                    </div>
+
+                    <div>
+                        <label className="block text-sm font-medium text-gray-600 mb-1">Cargo</label>
+                        <select value={cargoId} onChange={(e) => setCargoId(e.target.value)} className="w-full px-3 py-2 border rounded-lg">
+                            <option value="">Sem Cargo</option>
+                            {cargos.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
+                        </select>
+                    </div>
+
+                    <div>
+                        <label className="block text-sm font-medium text-gray-600 mb-1">Clientes Vinculados</label>
+                        <div className="max-h-32 overflow-y-auto border p-2 rounded bg-gray-50">
+                            {clientes.map(c => (
+                                <div key={c.id} className="flex items-center">
+                                    <input 
+                                        type="checkbox" 
+                                        checked={clienteIds.includes(c.id)} 
+                                        onChange={() => handleClientToggle(c.id)} 
+                                        className="mr-2"
+                                    />
+                                    <span>{c.nome}</span>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                    <Button onClick={handleSave} disabled={loading} className="w-full">
+                        {loading ? 'Salvando...' : 'Salvar Permissões'}
+                    </Button>
+                </div>
+            )}
+        </Card>
+    );
+};
+
+// =========================================================================
+// VIEWS
+// =========================================================================
+
+const ValidacaoLancamento = ({ db, userId, lancamentos, atividadesBase, funcionarios }) => {
+    // Componente inalterado, apenas mantendo a lógica
+    const pendentes = useMemo(() => lancamentos.filter(l => l.status === 'Pendente'), [lancamentos]);
+    const [scoreMap, setScoreMap] = useState({});
+    const [loadingMap, setLoadingMap] = useState({});
+
+    const getBaseInfo = useCallback((lancamento) => {
+        const atividade = atividadesBase.find(a => a.id === lancamento.atividadeBaseId) || {};
+        const funcionario = funcionarios.find(f => f.id === lancamento.funcionarioId) || {};
+        return { atividade, funcionario };
+    }, [atividadesBase, funcionarios]);
+
+    useEffect(() => {
+        const initialMap = {};
+        pendentes.forEach(l => { if (scoreMap[l.id] === undefined) initialMap[l.id] = (atividadesBase.find(a => a.id === l.atividadeBaseId)?.pontuacaoMaxima || 1); });
+        setScoreMap(prev => ({ ...prev, ...initialMap }));
+    }, [pendentes, getBaseInfo, atividadesBase]); // Added dependencies
+
+    const handleValidation = async (lancamento) => {
+        setLoadingMap(prev => ({ ...prev, [lancamento.id]: true }));
+        try {
+            await setDoc(doc(db, getPublicCollectionPath('lancamentos'), lancamento.id), {
+                status: 'Validado',
+                pontuacaoAtribuida: scoreMap[lancamento.id],
+                dataValidacao: serverTimestamp(),
+                validadorId: userId,
+            }, { merge: true });
+        } catch (error) { console.error(error); } finally { setLoadingMap(prev => ({ ...prev, [lancamento.id]: false })); }
+    };
+
+    if (pendentes.length === 0) return <div className="text-center p-6 bg-yellow-50 rounded text-yellow-800">Nenhum lançamento pendente.</div>;
+
+    return (
+        <div className="space-y-4">
+            {pendentes.map((lancamento) => {
+                const { atividade, funcionario } = getBaseInfo(lancamento);
+                const maxScore = atividade.pontuacaoMaxima || 1;
+                return (
+                    <Card key={lancamento.id} className="flex justify-between items-center">
+                        <div>
+                            <p className="font-bold text-indigo-600">{atividade.nome}</p>
+                            <p className="text-sm">{funcionario.nome}</p>
+                            <p className="text-xs text-gray-500">{formatDate(lancamento.dataConclusao)}</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <Input type="number" max={maxScore} value={scoreMap[lancamento.id] || 0} onChange={(e) => setScoreMap(prev => ({...prev, [lancamento.id]: e.target.value}))} className="w-20 text-center mb-0" />
+                            <Button onClick={() => handleValidation(lancamento)} disabled={loadingMap[lancamento.id]} icon={Check}>Validar</Button>
+                        </div>
+                    </Card>
+                );
+            })}
+        </div>
+    );
+};
+
+const AdminView = ({ db, userId, cargos, funcionarios, atividadesBase, lancamentos, clientes, bandeiras, onLogout, selectedMonth, setSelectedMonth }) => {
+    const [tab, setTab] = useState('dashboard');
+
+    return (
+        <div className="p-6 bg-gray-50 min-h-screen">
+            <header className="flex flex-col md:flex-row justify-between items-center mb-6 pb-4 border-b">
+                <h1 className="text-3xl font-extrabold text-indigo-800 flex items-center"><Settings className="mr-3" /> Admin</h1>
+                <div className="flex items-center gap-4">
+                    <MonthSelector selectedMonth={selectedMonth} setSelectedMonth={setSelectedMonth} />
+                    <Button onClick={onLogout} type="secondary" icon={LogOut}>Sair</Button>
+                </div>
+            </header>
+            <div className="flex gap-2 mb-6 overflow-x-auto pb-2">
+                {[
+                    { id: 'dashboard', icon: BarChart3, label: 'Dashboard' },
+                    { id: 'calendario', icon: CalendarIcon, label: 'Calendário' },
+                    { id: 'validacao', icon: ClipboardList, label: 'Validação' },
+                    { id: 'usuarios', icon: Users, label: 'Funcionários' },
+                    { id: 'cadastros', icon: Briefcase, label: 'Cadastros' },
+                ].map(t => (
+                    <button key={t.id} onClick={() => setTab(t.id)} className={`px-4 py-2 rounded-lg flex items-center whitespace-nowrap ${tab === t.id ? 'bg-indigo-600 text-white' : 'bg-white text-gray-600'}`}>
+                        <t.icon className="w-4 h-4 mr-2" /> {t.label}
+                    </button>
+                ))}
+            </div>
+
+            {tab === 'dashboard' && <DashboardContent cargos={cargos} funcionarios={funcionarios} atividadesBase={atividadesBase} lancamentos={lancamentos} clientes={clientes} bandeiras={bandeiras} />}
+            {tab === 'calendario' && <CalendarView db={db} userId={userId} funcionarios={funcionarios} lancamentos={lancamentos} bandeiras={bandeiras} selectedMonth={selectedMonth} />}
+            {tab === 'validacao' && <ValidacaoLancamento db={db} userId={userId} lancamentos={lancamentos} atividadesBase={atividadesBase} funcionarios={funcionarios} />}
+            {tab === 'usuarios' && <FuncionarioManagement db={db} userId={userId} cargos={cargos} clientes={clientes} funcionarios={funcionarios} />}
+            {tab === 'cadastros' && (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <CargoForm db={db} userId={userId} cargos={cargos} />
+                    <AtividadeBaseForm db={db} userId={userId} cargos={cargos} atividadesBase={atividadesBase} />
+                    <ClienteForm db={db} userId={userId} clientes={clientes} />
+                </div>
+            )}
+        </div>
+    );
+};
+
+// =========================================================================
+// EMPLOYEE AREA
+// =========================================================================
+
+const LancarAtividade = ({ db, userId, funcionario, atividadesBase, lancamentos, clientes }) => {
+    const [selAtvId, setSelAtvId] = useState('');
+    const [selCliId, setSelCliId] = useState('');
+    const [desc, setDesc] = useState('');
+    const [date, setDate] = useState('');
+    const [loading, setLoading] = useState(false);
+
+    const atvs = useMemo(() => funcionario ? atividadesBase.filter(a => a.cargoId === funcionario.cargoId) : [], [atividadesBase, funcionario]);
+    const clis = useMemo(() => funcionario && funcionario.clienteIds ? clientes.filter(c => funcionario.clienteIds.includes(c.id)) : [], [clientes, funcionario]);
+    const meusLancamentos = useMemo(() => lancamentos.filter(l => l.funcionarioId === userId).sort((a, b) => (b.dataLancamento?.toDate() || 0) - (a.dataLancamento?.toDate() || 0)), [lancamentos, userId]);
+
+    const handleSubmit = async (e) => {
+        e.preventDefault();
+        setLoading(true);
+        try {
+            await addDoc(collection(db, getPublicCollectionPath('lancamentos')), {
+                funcionarioId: userId,
+                atividadeBaseId: selAtvId,
+                clienteId: selCliId,
+                descricao: desc,
+                dataConclusao: date,
+                dataLancamento: serverTimestamp(),
+                status: 'Pendente',
+                pontuacaoAtribuida: 0
+            });
+            setDesc(''); setSelAtvId(''); setSelCliId(''); setDate('');
+        } catch (e) { console.error(e); } finally { setLoading(false); }
+    };
+
+    return (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <Card title="Novo Lançamento" icon={Plus}>
+                <form onSubmit={handleSubmit}>
+                    <div className="mb-4">
+                        <label className="block text-sm text-gray-600">Cliente</label>
+                        <select value={selCliId} onChange={(e) => setSelCliId(e.target.value)} className="w-full px-3 py-2 border rounded-lg">
+                            <option value="">Selecione (Opcional)</option>
+                            {clis.map(c => <option key={c.id} value={c.id}>{c.nome}</option>)}
+                        </select>
+                    </div>
+                    <div className="mb-4">
+                        <label className="block text-sm text-gray-600">Atividade</label>
+                        <select value={selAtvId} onChange={(e) => setSelAtvId(e.target.value)} className="w-full px-3 py-2 border rounded-lg" required>
+                            <option value="">Selecione</option>
+                            {atvs.map(a => <option key={a.id} value={a.id}>{a.nome}</option>)}
+                        </select>
+                    </div>
+                    <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} required label="Data" />
+                    <textarea value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="Detalhes..." className="w-full px-3 py-2 border rounded-lg mb-4" rows="3"></textarea>
+                    <Button disabled={loading} className="w-full">Lançar</Button>
+                </form>
+            </Card>
+            <Card title="Histórico Recente" icon={ClipboardList} className="md:col-span-2">
+                <div className="space-y-2 max-h-80 overflow-y-auto">
+                    {meusLancamentos.map(l => (
+                        <div key={l.id} className="p-3 border rounded bg-gray-50 flex justify-between items-center">
+                            <div>
+                                <span className="font-bold">{atividadesBase.find(a => a.id === l.atividadeBaseId)?.nome || '?'}</span>
+                                <span className="text-xs ml-2 px-2 py-1 rounded bg-white border">{l.status}</span>
+                                <p className="text-xs text-gray-500">{formatDate(l.dataConclusao)}</p>
+                            </div>
+                            {l.status === 'Pendente' && <button onClick={() => deleteDoc(doc(db, getPublicCollectionPath('lancamentos'), l.id))} className="text-red-500"><Trash2 className="w-4 h-4" /></button>}
+                        </div>
+                    ))}
+                </div>
+            </Card>
+        </div>
+    );
+};
+
+const EmployeeView = ({ db, userId, funcionario, cargos, atividadesBase, lancamentos, clientes, bandeiras, onLogout, selectedMonth, setSelectedMonth }) => {
+    const cargoNome = useMemo(() => cargos.find(c => c.id === funcionario?.cargoId)?.nome || 'Não Atribuído', [cargos, funcionario]);
+    const minhasBandeiras = useMemo(() => bandeiras.filter(b => b.funcionarioId === userId && (!selectedMonth || b.data.startsWith(selectedMonth))), [bandeiras, userId, selectedMonth]);
+
+    return (
+        <div className="p-6 bg-gray-50 min-h-screen">
+            <header className="flex justify-between items-center mb-6">
+                <h1 className="text-2xl font-bold text-indigo-800 flex items-center"><User className="mr-2" /> Olá, {funcionario?.nome}</h1>
+                <div className="flex gap-4 items-center">
+                    <MonthSelector selectedMonth={selectedMonth} setSelectedMonth={setSelectedMonth} />
+                    <Button onClick={onLogout} type="secondary" icon={LogOut}>Sair</Button>
+                </div>
+            </header>
+            <div className="mb-6">
+                <Card className="bg-indigo-100 border-indigo-200">
+                    <p className="text-indigo-800 font-semibold">Cargo: {cargoNome}</p>
+                    {minhasBandeiras.length > 0 && (
+                        <div className="mt-4 bg-red-100 border border-red-300 p-3 rounded text-red-800">
+                            <p className="font-bold flex items-center"><AlertTriangle className="w-4 h-4 mr-2" /> Você tem {minhasBandeiras.length} bandeira(s) neste mês.</p>
+                        </div>
+                    )}
+                </Card>
+            </div>
+            <LancarAtividade db={db} userId={userId} funcionario={funcionario} atividadesBase={atividadesBase} lancamentos={lancamentos} clientes={clientes} />
+        </div>
+    );
+};
+
+// =========================================================================
+// APP ROOT
+// =========================================================================
+
+const App = () => {
+    const [user, setUser] = useState(null);
+    const [userProfile, setUserProfile] = useState(null);
+    const [loadingAuth, setLoadingAuth] = useState(true);
+    const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().substring(0, 7));
+
+    // Data States
+    const [cargos, setCargos] = useState([]);
+    const [atividadesBase, setAtividadesBase] = useState([]);
+    const [funcionarios, setFuncionarios] = useState([]);
+    const [lancamentos, setLancamentos] = useState([]);
+    const [clientes, setClientes] = useState([]);
+    const [bandeiras, setBandeiras] = useState([]);
+
+    useEffect(() => {
+        app = initializeApp(firebaseConfig);
+        db = getFirestore(app);
+        auth = getAuth(app);
+
+        const unsubAuth = onAuthStateChanged(auth, (u) => {
+            setUser(u);
+            if (!u) {
+                setUserProfile(null);
+                setLoadingAuth(false);
+            }
+        });
+        return () => unsubAuth();
+    }, []);
+
+    useEffect(() => {
+        if (user && db) {
+            // Fetch user profile
+            const unsubProfile = onSnapshot(doc(db, getPublicCollectionPath('funcionarios'), user.uid), (doc) => {
+                if (doc.exists()) {
+                    setUserProfile(doc.data());
+                } else {
+                    // Fallback if profile doesn't exist yet (should be created at register)
+                    setUserProfile({ id: user.uid, nome: user.email, isAdmin: false });
+                }
+                setLoadingAuth(false);
+            });
+
+            // Fetch all data
+            const unsubCargos = onSnapshot(query(collection(db, getPublicCollectionPath('cargos'))), s => setCargos(s.docs.map(d => ({id:d.id, ...d.data()}))));
+            const unsubAtvs = onSnapshot(query(collection(db, getPublicCollectionPath('atividadesBase'))), s => setAtividadesBase(s.docs.map(d => ({id:d.id, ...d.data()}))));
+            const unsubFuncs = onSnapshot(query(collection(db, getPublicCollectionPath('funcionarios'))), s => setFuncionarios(s.docs.map(d => ({id:d.id, ...d.data()}))));
+            const unsubLancs = onSnapshot(query(collection(db, getPublicCollectionPath('lancamentos'))), s => setLancamentos(s.docs.map(d => ({id:d.id, ...d.data()}))));
+            const unsubClis = onSnapshot(query(collection(db, getPublicCollectionPath('clientes'))), s => setClientes(s.docs.map(d => ({id:d.id, ...d.data()}))));
+            const unsubFlags = onSnapshot(query(collection(db, getPublicCollectionPath('bandeiras'))), s => setBandeiras(s.docs.map(d => ({id:d.id, ...d.data()}))));
+
+            return () => {
+                unsubProfile(); unsubCargos(); unsubAtvs(); unsubFuncs(); unsubLancs(); unsubClis(); unsubFlags();
+            };
+        }
+    }, [user]);
+
+    const handleLogout = () => signOut(auth);
+
+    // Filter logic
+    const filteredLancamentos = useMemo(() => lancamentos.filter(l => !l.dataConclusao || l.dataConclusao.startsWith(selectedMonth)), [lancamentos, selectedMonth]);
+    const filteredBandeiras = useMemo(() => bandeiras.filter(b => !b.data || b.data.startsWith(selectedMonth)), [bandeiras, selectedMonth]);
+
+    if (loadingAuth) return <div className="flex items-center justify-center h-screen text-indigo-600">Carregando...</div>;
+
+    if (!user) return <LoginScreen />;
+
+    if (userProfile?.isAdmin) {
+        return <AdminView db={db} userId={user.uid} cargos={cargos} funcionarios={funcionarios} atividadesBase={atividadesBase} lancamentos={filteredLancamentos} clientes={clientes} bandeiras={filteredBandeiras} onLogout={handleLogout} selectedMonth={selectedMonth} setSelectedMonth={setSelectedMonth} />;
+    }
+
+    return <EmployeeView db={db} userId={user.uid} funcionario={userProfile} cargos={cargos} atividadesBase={atividadesBase} lancamentos={filteredLancamentos} clientes={clientes} bandeiras={filteredBandeiras} onLogout={handleLogout} selectedMonth={selectedMonth} setSelectedMonth={setSelectedMonth} />;
+};
+
+export default App;
