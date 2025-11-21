@@ -59,6 +59,8 @@
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
         const auth = getAuth(app);
+        
+        // App Secundária para criar usuários sem deslogar o admin atual
         const secondaryApp = initializeApp(firebaseConfig, "SecondaryApp");
         const secondaryAuth = getAuth(secondaryApp);
 
@@ -84,7 +86,6 @@
                 secondary: "bg-white text-gray-700 border border-gray-300 hover:bg-gray-50",
                 danger: "bg-red-50 text-red-600 border border-red-200 hover:bg-red-100",
                 ghost: "text-gray-500 hover:bg-gray-100 border-transparent",
-                demo: "bg-amber-100 text-amber-800 border border-amber-200 hover:bg-amber-200",
                 primary: "bg-indigo-600 text-white hover:bg-indigo-700 shadow-sm"
             };
             return <button onClick={onClick} disabled={disabled} className={`${base} ${colors[type] || colors.primary} ${className}`}>{Icon && <Icon className={`w-4 h-4 ${children?'mr-2':''}`}/>}{children}</button>;
@@ -97,47 +98,100 @@
             </div>
         );
 
-        // --- TELAS ---
+        const MonthSelector = ({ selectedMonth, setSelectedMonth }) => (
+            <div className="flex items-center space-x-2 bg-white p-1 rounded-lg border border-gray-200 shadow-sm">
+                <label htmlFor="month-select" className="text-xs font-medium text-gray-500 pl-2">Mês:</label>
+                <input type="month" id="month-select" value={selectedMonth} onChange={(e) => setSelectedMonth(e.target.value)} className="text-sm border-none focus:ring-0 bg-transparent text-gray-700 font-medium cursor-pointer outline-none" />
+            </div>
+        );
+
+        // --- TELA DE LOGIN (SELEÇÃO DE PERFIL + LOGIN REAL) ---
         const LoginScreen = ({ onRoleSelect }) => {
             const [step, setStep] = useState(1);
+            const [role, setRole] = useState(null);
             const [email, setEmail] = useState('');
             const [password, setPassword] = useState('');
             const [loading, setLoading] = useState(false);
             const [error, setError] = useState('');
+            const [isRegistering, setIsRegistering] = useState(false);
+            const [name, setName] = useState('');
 
-            const handleLogin = async (e) => {
-                e.preventDefault(); setLoading(true); setError('');
-                try { await signInWithEmailAndPassword(auth, email, password); } 
-                catch (err) { setError("Erro: " + err.message); setLoading(false); }
+            const handleRoleClick = (selectedRole) => {
+                setRole(selectedRole);
+                onRoleSelect(selectedRole); // Notifica o App sobre a intenção
+                setStep(2);
+                setError('');
+            };
+
+            const handleAuth = async (e) => {
+                e.preventDefault();
+                setLoading(true); 
+                setError('');
+                try {
+                    if (isRegistering) {
+                        // Registro básico para primeiro acesso (opcional na tela inicial)
+                        const cred = await createUserWithEmailAndPassword(auth, email, password);
+                        const isSuper = SUPER_ADMINS.includes(email);
+                        await setDoc(doc(db, `artifacts/${appId}/public/data/funcionarios`, cred.user.uid), {
+                            id: cred.user.uid, nome: name, email: email, isAdmin: isSuper, cargoId: '', clienteIds: [], timestamp: serverTimestamp()
+                        });
+                    } else {
+                        await signInWithEmailAndPassword(auth, email, password);
+                    }
+                    // Sucesso: O onAuthStateChanged no App assumirá o controle
+                } catch (err) {
+                    setError("Erro: " + err.message);
+                    setLoading(false);
+                }
             };
 
             if(step === 1) return (
                 <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 p-4">
-                    <div className="text-center mb-10"><h1 className="text-3xl font-bold text-gray-800 mb-2">Sistema de Pautas</h1><p className="text-gray-500">Selecione seu perfil</p></div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-3xl w-full mb-8">
-                        <div onClick={()=>onRoleSelect('admin')} className="bg-white p-8 rounded-2xl shadow-sm border cursor-pointer hover:border-indigo-500 transition group text-center"><div className="bg-indigo-50 p-4 rounded-full mb-4 mx-auto w-16 group-hover:bg-indigo-100"><ShieldCheck className="w-8 h-8 text-indigo-600"/></div><h2 className="text-xl font-bold">Administrador</h2><p className="text-sm text-gray-500">Gestão e Validação</p></div>
-                        <div onClick={()=>onRoleSelect('employee')} className="bg-white p-8 rounded-2xl shadow-sm border cursor-pointer hover:border-green-500 transition group text-center"><div className="bg-green-50 p-4 rounded-full mb-4 mx-auto w-16 group-hover:bg-green-100"><UserCircle className="w-8 h-8 text-green-600"/></div><h2 className="text-xl font-bold">Funcionário</h2><p className="text-sm text-gray-500">Produção</p></div>
+                    <div className="text-center mb-10">
+                        <h1 className="text-4xl font-bold text-indigo-900 mb-2 tracking-tight">Sistema de Pautas</h1>
+                        <p className="text-gray-500">Selecione seu perfil de acesso</p>
                     </div>
-                    <button onClick={()=>setStep(2)} className="text-sm text-indigo-600 hover:underline">Tenho senha (Login Real)</button>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-3xl w-full mb-8">
+                        <div onClick={()=>handleRoleClick('admin')} className="bg-white p-8 rounded-2xl shadow-sm border cursor-pointer hover:border-indigo-500 transition group text-center hover:shadow-md">
+                            <div className="bg-indigo-50 p-4 rounded-full mb-4 mx-auto w-16 group-hover:bg-indigo-100 transition"><ShieldCheck className="w-8 h-8 text-indigo-600"/></div>
+                            <h2 className="text-xl font-bold text-gray-800">Administrador</h2>
+                            <p className="text-sm text-gray-500 mt-2">Gestão e Validação</p>
+                        </div>
+                        <div onClick={()=>handleRoleClick('employee')} className="bg-white p-8 rounded-2xl shadow-sm border cursor-pointer hover:border-green-500 transition group text-center hover:shadow-md">
+                            <div className="bg-green-50 p-4 rounded-full mb-4 mx-auto w-16 group-hover:bg-green-100 transition"><UserCircle className="w-8 h-8 text-green-600"/></div>
+                            <h2 className="text-xl font-bold text-gray-800">Funcionário</h2>
+                            <p className="text-sm text-gray-500 mt-2">Produção e Lançamentos</p>
+                        </div>
+                    </div>
                 </div>
             );
 
             return (
                 <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
                     <Card className="w-full max-w-md relative border-0 shadow-xl">
-                        <button onClick={()=>setStep(1)} className="absolute top-6 left-6 text-gray-400 hover:text-gray-600 flex items-center text-xs uppercase"><ArrowLeft className="w-3 h-3 mr-1"/> Voltar</button>
-                        <div className="text-center mb-8 mt-4"><h1 className="text-2xl font-bold">Login</h1><p className="text-sm text-gray-500">Acesso restrito</p></div>
-                        <form onSubmit={handleLogin}>
-                            <Input label="E-mail" value={email} onChange={e=>setEmail(e.target.value)} required />
+                        <button onClick={()=>{setStep(1); setIsRegistering(false);}} className="absolute top-6 left-6 text-gray-400 hover:text-gray-600 flex items-center text-xs uppercase font-bold"><ArrowLeft className="w-3 h-3 mr-1"/> Voltar</button>
+                        <div className="text-center mb-8 mt-4">
+                            <h1 className="text-2xl font-bold text-gray-800">Login {role === 'admin' ? 'Admin' : ''}</h1>
+                            <p className="text-gray-500 text-sm">Insira suas credenciais</p>
+                        </div>
+                        <form onSubmit={handleAuth}>
+                            {isRegistering && <Input label="Nome" value={name} onChange={e=>setName(e.target.value)} required />}
+                            <Input label="E-mail" type="email" value={email} onChange={e=>setEmail(e.target.value)} required />
                             <Input label="Senha" type="password" value={password} onChange={e=>setPassword(e.target.value)} required />
                             {error && <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm mb-4 text-center border border-red-100">{error}</div>}
-                            <Button className="w-full" disabled={loading}>{loading ? 'Entrando...' : 'Entrar'}</Button>
+                            <Button className="w-full h-10" disabled={loading}>{loading ? 'Processando...' : (isRegistering ? 'Criar Conta' : 'Entrar')}</Button>
                         </form>
+                        <div className="text-center mt-4 pt-4 border-t border-gray-100">
+                            <button onClick={() => { setIsRegistering(!isRegistering); setError(''); }} className="text-xs text-gray-500 hover:text-indigo-600 font-medium">
+                                {isRegistering ? 'Já possui conta? Faça Login' : 'Não tem acesso? Cadastre-se aqui'}
+                            </button>
+                        </div>
                     </Card>
                 </div>
             );
         };
 
+        // --- GRÁFICOS E VISUALIZAÇÕES ---
         const RankingChart = ({ data }) => {
             const maxScore = Math.max(...data.map(f => f.score || 0), 1); 
             return (
@@ -185,15 +239,16 @@
                 return d.map(x => ({ ...x, pts: Math.max(0, x.pts), score: x.max > 0 ? ((Math.max(0, x.pts)/x.max)*100).toFixed(0) : 0 })).sort((a,b)=>b.score-a.score);
             }, [funcionarios, lancamentos, bandeiras, atividades]);
 
+            // Criação de Usuário pelo Admin (usando Auth Secundário)
             const handleCreateUser = async (data) => {
                 try {
                     const cred = await createUserWithEmailAndPassword(secondaryAuth, data.email, data.password);
                     await setDoc(doc(db, getPublicCollectionPath('funcionarios'), cred.user.uid), {
                         id: cred.user.uid, nome: data.nome, email: data.email, cargoId: data.cargoId, clienteIds: data.cliIds, isAdmin: data.isAdmin, criadoPor: userId, timestamp: serverTimestamp()
                     });
-                    await signOut(secondaryAuth);
-                    alert("Usuário criado!"); setShowUserModal(false);
-                } catch(e) { alert(e.message); }
+                    await signOut(secondaryAuth); // Limpa a sessão secundária
+                    alert("Usuário criado com sucesso!"); setShowUserModal(false);
+                } catch(e) { alert("Erro ao criar usuário: " + e.message); }
             };
 
             const handleAdd = async (col, data) => addDoc(collection(db, getPublicCollectionPath(col)), { ...data, criadoPor: userId, timestamp: serverTimestamp() });
@@ -244,20 +299,14 @@
         const EmployeeView = ({ db, userId, user, cargos, atividades, lancamentos, clientes, bandeiras, logout, month, setMonth }) => {
             const [form, setForm] = useState({ atvId: '', cliId: '', date: '', desc: '' });
             const cargo = cargos.find(c=>c.id===user.cargoId);
-            // Filtra lançamentos e bandeiras por usuário E mês (props já vem filtradas por mês do App, mas filtramos por user aqui)
             const myLancs = lancamentos.filter(l=>l.funcionarioId===userId);
             const myFlags = bandeiras.filter(b=>b.funcionarioId===userId);
-            
-            // Filtros para o formulário
             const myAtvs = atividades.filter(a=>a.cargoId===user.cargoId);
             const myClis = clientes.filter(c=>(user.clienteIds||[]).includes(c.id));
 
-            // CALCULA A PONTUAÇÃO TOTAL (Soma dos validados - Penalidades)
             const totalScore = useMemo(() => {
-                const points = myLancs
-                    .filter(l => l.status === 'Validado')
-                    .reduce((acc, curr) => acc + Number(curr.pontuacaoAtribuida || 0), 0);
-                const penaltyPoints = myFlags.length; // Assumindo 1 ponto por bandeira
+                const points = myLancs.filter(l => l.status === 'Validado').reduce((acc, curr) => acc + Number(curr.pontuacaoAtribuida || 0), 0);
+                const penaltyPoints = myFlags.length;
                 return Math.max(0, points - penaltyPoints);
             }, [myLancs, myFlags]);
 
@@ -273,41 +322,15 @@
             return (
                 <div className="p-6 min-h-screen max-w-7xl mx-auto">
                     <header className="flex justify-between items-center mb-8 pb-4 border-b"><h1 className="text-2xl font-bold text-indigo-800 flex items-center"><User className="mr-2"/> {user.nome}</h1><div className="flex gap-4"><input type="month" value={month} onChange={e=>setMonth(e.target.value)} className="border rounded p-2"/><Button onClick={logout} type="secondary" icon={LogOut}>Sair</Button></div></header>
-                    
                     <div className="mb-8 grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <Card className="bg-indigo-50 border-indigo-100">
-                            <div className="flex justify-between items-center">
-                                <div><p className="text-sm font-bold text-gray-500 uppercase">Cargo</p><p className="text-xl text-indigo-700">{cargo?.nome || '-'}</p></div>
-                                {myFlags.length > 0 && <div className="bg-red-100 text-red-700 px-4 py-2 rounded border border-red-200 flex items-center"><AlertTriangle className="w-5 h-5 mr-2"/>{myFlags.length} Penalidades</div>}
-                            </div>
-                        </Card>
-
-                        {/* NOVO CARD DE PONTUAÇÃO */}
-                        <Card className="bg-green-50 border-green-100">
-                             <div className="flex items-center justify-between">
-                                <div>
-                                    <p className="text-sm font-bold text-gray-500 uppercase">Pontuação Acumulada</p>
-                                    <p className="text-3xl font-extrabold text-green-700">{totalScore} pts</p>
-                                </div>
-                                <div className="bg-green-200 p-3 rounded-full text-green-800">
-                                    <Star className="w-8 h-8 fill-current" />
-                                </div>
-                             </div>
-                        </Card>
+                        <Card className="bg-indigo-50 border-indigo-100"><div className="flex justify-between items-center"><div><p className="text-sm font-bold text-gray-500 uppercase">Cargo</p><p className="text-xl text-indigo-700">{cargo?.nome || '-'}</p></div>{myFlags.length > 0 && <div className="bg-red-100 text-red-700 px-4 py-2 rounded border border-red-200 flex items-center"><AlertTriangle className="w-5 h-5 mr-2"/>{myFlags.length} Penalidades</div>}</div></Card>
+                        <Card className="bg-green-50 border-green-100"><div className="flex items-center justify-between"><div><p className="text-sm font-bold text-gray-500 uppercase">Pontuação Acumulada</p><p className="text-3xl font-extrabold text-green-700">{totalScore} pts</p></div><div className="bg-green-200 p-3 rounded-full text-green-800"><Star className="w-8 h-8 fill-current" /></div></div></Card>
                     </div>
-
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                         <Card title="Novo Lançamento" icon={Plus}>
                             <form onSubmit={handleSubmit} className="space-y-4">
                                 <div><label className="text-xs font-bold text-gray-500">Cliente</label><select className="w-full border rounded p-2" value={form.cliId} onChange={e=>setForm({...form, cliId:e.target.value})}><option value="">Selecione...</option>{myClis.map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}</select></div>
-                                <div>
-                                    <label className="text-xs font-bold text-gray-500">Atividade</label>
-                                    <select className="w-full border rounded p-2" value={form.atvId} onChange={e=>setForm({...form, atvId:e.target.value})} required>
-                                        <option value="">Selecione...</option>
-                                        {/* MOSTRA APENAS O NOME, SEM PONTOS */}
-                                        {myAtvs.map(a=><option key={a.id} value={a.id}>{a.nome}</option>)}
-                                    </select>
-                                </div>
+                                <div><label className="text-xs font-bold text-gray-500">Atividade</label><select className="w-full border rounded p-2" value={form.atvId} onChange={e=>setForm({...form, atvId:e.target.value})} required><option value="">Selecione...</option>{myAtvs.map(a=><option key={a.id} value={a.id}>{a.nome}</option>)}</select></div>
                                 <Input label="Data" type="date" value={form.date} onChange={e=>setForm({...form, date:e.target.value})} required />
                                 <Button className="w-full">Lançar</Button>
                             </form>
@@ -320,9 +343,8 @@
             );
         };
 
-        // --- COMPONENTES AUXILIARES ---
         const SimpleForm = ({ title, list, onAdd, onDel, extraFields, cargos }) => {
-            const [val, setVal] = useState(''); const [cid, setCid] = useState(''); const [peso, setPeso] = useState(1);
+            const [val, setVal] = useState(''); const [cid, setCid] = useState(''); 
             return (
                 <Card title={title} icon={ListTodo}>
                     <div className="flex gap-2 mb-4">
@@ -365,7 +387,6 @@
             </div>
         );
 
-        // --- APP ROOT ---
         const App = () => {
             const [user, setUser] = useState(null);
             const [profile, setProfile] = useState(null);
@@ -373,7 +394,7 @@
             const [targetRole, setTargetRole] = useState(null);
             const [month, setMonth] = useState(new Date().toISOString().slice(0,7));
 
-            // Data
+            // Dados
             const [cargos, setCargos] = useState([]);
             const [atividades, setAtividades] = useState([]);
             const [funcs, setFuncs] = useState([]);
@@ -394,11 +415,11 @@
                             if(SUPER_ADMINS.includes(data.email)) data.isAdmin = true;
                             setProfile(data);
                         } else {
-                            setProfile({ id: user.uid, nome: 'Novo Usuário', email: 'anon', isAdmin: targetRole === 'admin' });
+                            // Fallback de perfil vazio para não travar o login
+                            setProfile({ id: user.uid, nome: 'Usuário', email: 'email', isAdmin: false });
                         }
                         setLoading(false);
                     });
-                    // Listeners de Dados
                     const q = (n) => query(collection(db, getPublicCollectionPath(n)));
                     const uC = onSnapshot(q('cargos'), s => setCargos(s.docs.map(d=>({id:d.id,...d.data()}))));
                     const uA = onSnapshot(q('atividadesBase'), s => setAtividades(s.docs.map(d=>({id:d.id,...d.data()}))));
@@ -413,18 +434,14 @@
             const filteredLancs = useMemo(() => lancs.filter(l => !l.dataConclusao || l.dataConclusao.startsWith(month)), [lancs, month]);
             const filteredFlags = useMemo(() => flags.filter(f => !f.data || f.data.startsWith(month)), [flags, month]);
 
-            const handleRoleSelect = async (role) => {
-                setTargetRole(role); setLoading(true);
-                try { await signInAnonymously(auth); } catch(e) { console.error(e); setLoading(false); }
-            };
-
-            const handleLogout = () => { signOut(auth); };
+            const handleRoleSelect = (role) => setTargetRole(role);
+            const handleLogout = () => { signOut(auth); setTargetRole(null); };
 
             if(loading) return <div className="flex h-screen items-center justify-center font-bold text-indigo-600 animate-pulse">Carregando...</div>;
             
             if(!user) return <LoginScreen onRoleSelect={handleRoleSelect} />;
 
-            // Lógica de Permissão
+            // Roteamento
             if(targetRole === 'admin') {
                 if(profile && !profile.isAdmin) return <AccessDenied onBack={handleLogout} />;
                 return <AdminView db={db} userId={user.uid} cargos={cargos} funcionarios={funcs} atividades={atividades} lancamentos={filteredLancs} clientes={clis} bandeiras={filteredFlags} logout={handleLogout} month={month} setMonth={setMonth} />;
