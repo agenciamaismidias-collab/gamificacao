@@ -1,0 +1,856 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistema de Avaliação de Pautas</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- React & ReactDOM & Babel -->
+    <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- Lucide Icons (Global) -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    
+    <style>
+        /* Ajustes finos para scroll */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f1f1; }
+        ::-webkit-scrollbar-thumb { background: #888; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #555; }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-800">
+    <div id="root"></div>
+
+    <script type="text/babel" data-type="module">
+        // --- IMPORTAÇÕES DO FIREBASE (VERSÃO MODULAR VIA CDN) ---
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.1/firebase-app.js";
+        import { 
+            getAuth, 
+            signInWithEmailAndPassword, 
+            createUserWithEmailAndPassword, 
+            signOut, 
+            onAuthStateChanged 
+        } from "https://www.gstatic.com/firebasejs/10.13.1/firebase-auth.js";
+        import { 
+            getFirestore, collection, doc, setDoc, addDoc, getDoc, 
+            query, onSnapshot, where, serverTimestamp, runTransaction, 
+            deleteDoc, getDocs
+        } from "https://www.gstatic.com/firebasejs/10.13.1/firebase-firestore.js";
+
+        // --- IMPORTAÇÕES DO LUCIDE REACT VIA ESM ---
+        import { 
+            Settings, Users, Briefcase, ListTodo, ClipboardList, Zap, 
+            BarChart3, User, LogOut, ArrowLeft, Plus, Check, Building, 
+            Trash2, Pencil, X, Calendar as CalendarIcon, Flag, AlertTriangle, 
+            Lock, Mail, ChevronLeft, ChevronRight
+        } from "https://esm.sh/lucide-react@0.292.0";
+
+        const React = window.React;
+        const useState = React.useState;
+        const useEffect = React.useEffect;
+        const useMemo = React.useMemo;
+        const useCallback = React.useCallback;
+
+        // --- CONFIGURAÇÃO GERAL ---
+        const appId = 'sistema-avaliacao-pautas';
+
+        // Configuração do Firebase (Atualizada com suas chaves)
+        const firebaseConfig = {
+            apiKey: "AIzaSyBZ76yd8RbRQVjbJ115QqL3oDztxedq0OY",
+            authDomain: "agmm-16a91.firebaseapp.com",
+            projectId: "agmm-16a91",
+            storageBucket: "agmm-16a91.firebasestorage.app",
+            messagingSenderId: "784096179999",
+            appId: "1:784096179999:web:68597a2a52a668e224622a",
+            measurementId: "G-9K9X7QT5SS"
+        };
+
+        // --- INICIALIZAÇÃO DO FIREBASE ---
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+
+        // --- FUNÇÕES UTILITÁRIAS ---
+        const getPublicCollectionPath = (collectionName) => {
+            return `artifacts/${appId}/public/data/${collectionName}`;
+        };
+
+        const formatDate = (data) => {
+            if (!data) return 'N/A';
+            if (data.toDate) { 
+                return data.toDate().toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+            }
+            try {
+                const [year, month, day] = data.split('-');
+                return `${day}/${month}/${year}`;
+            } catch {
+                return 'N/A';
+            }
+        };
+
+        // --- COMPONENTES DE UI ---
+        const Card = ({ children, title, icon: Icon, className = "" }) => (
+            <div className={`bg-white p-6 rounded-xl shadow-lg border border-gray-100 transition-all hover:shadow-xl ${className}`}>
+                {title && (
+                    <h2 className="flex items-center text-xl font-bold text-gray-800 mb-4 border-b pb-2">
+                        {Icon && <Icon className="w-5 h-5 mr-2 text-indigo-600" />}
+                        {title}
+                    </h2>
+                )}
+                {children}
+            </div>
+        );
+
+        const Button = ({ children, onClick, disabled = false, icon: Icon, type = "primary", className = "" }) => {
+            const baseClasses = "flex items-center justify-center px-4 py-2 font-semibold rounded-lg transition-all duration-200 shadow-md disabled:opacity-50 disabled:cursor-not-allowed";
+            let colorClasses = "";
+
+            switch (type) {
+                case 'secondary': colorClasses = "bg-gray-200 text-gray-700 hover:bg-gray-300"; break;
+                case 'danger': colorClasses = "bg-red-500 text-white hover:bg-red-600"; break;
+                default: colorClasses = "bg-indigo-600 text-white hover:bg-indigo-700"; break;
+            }
+
+            return (
+                <button onClick={onClick} disabled={disabled} className={`${baseClasses} ${colorClasses} ${className}`}>
+                    {Icon && <Icon className="w-5 h-5 mr-2" />}
+                    {children}
+                </button>
+            );
+        };
+
+        const Input = ({ label, type = "text", value, onChange, placeholder = "", min, max, required = false, className = "" }) => (
+            <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-600 mb-1">{label} {required && <span className="text-red-500">*</span>}</label>
+                <input
+                    type={type}
+                    value={value || ''}
+                    onChange={onChange}
+                    placeholder={placeholder}
+                    min={min}
+                    max={max}
+                    required={required}
+                    className={`w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 ${className}`}
+                />
+            </div>
+        );
+
+        const MonthSelector = ({ selectedMonth, setSelectedMonth }) => (
+            <div className="flex items-center space-x-2">
+                <label htmlFor="month-select" className="text-sm font-medium text-gray-700">Filtrar Mês:</label>
+                <input
+                    type="month"
+                    id="month-select"
+                    value={selectedMonth}
+                    onChange={(e) => setSelectedMonth(e.target.value)}
+                    className="px-3 py-1.5 border border-gray-300 rounded-lg focus:ring-indigo-500 focus:border-indigo-500"
+                />
+            </div>
+        );
+
+        // --- TELA DE LOGIN ---
+        const LoginScreen = () => {
+            const [isRegistering, setIsRegistering] = useState(false);
+            const [email, setEmail] = useState('');
+            const [password, setPassword] = useState('');
+            const [name, setName] = useState('');
+            const [error, setError] = useState('');
+            const [loading, setLoading] = useState(false);
+
+            const handleAuth = async (e) => {
+                e.preventDefault();
+                setError('');
+                setLoading(true);
+
+                try {
+                    if (isRegistering) {
+                        const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+                        const user = userCredential.user;
+                        await setDoc(doc(db, getPublicCollectionPath('funcionarios'), user.uid), {
+                            id: user.uid,
+                            nome: name,
+                            email: email,
+                            isAdmin: false, 
+                            cargoId: '', 
+                            clienteIds: [],
+                            timestamp: serverTimestamp()
+                        });
+                    } else {
+                        await signInWithEmailAndPassword(auth, email, password);
+                    }
+                } catch (err) {
+                    console.error("Erro de autenticação:", err);
+                    let msg = "Erro ao autenticar: " + err.message;
+                    if (err.code === 'auth/email-already-in-use') msg = "Este e-mail já está em uso.";
+                    if (err.code === 'auth/weak-password') msg = "A senha deve ter pelo menos 6 caracteres.";
+                    if (err.code === 'auth/invalid-credential') msg = "E-mail ou senha incorretos.";
+                    setError(msg);
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            return (
+                <div className="min-h-screen flex items-center justify-center bg-indigo-50 p-4">
+                    <Card className="w-full max-w-md">
+                        <div className="text-center mb-6">
+                            <div className="bg-indigo-100 p-3 rounded-full w-16 h-16 flex items-center justify-center mx-auto mb-4">
+                                <Lock className="w-8 h-8 text-indigo-600" />
+                            </div>
+                            <h1 className="text-2xl font-bold text-gray-800">Sistema de Pautas</h1>
+                            <p className="text-gray-500 text-sm mt-1">Acesse sua conta para continuar</p>
+                        </div>
+                        <form onSubmit={handleAuth}>
+                            {isRegistering && (
+                                <Input label="Nome Completo" placeholder="Ex: João Silva" value={name} onChange={(e) => setName(e.target.value)} required />
+                            )}
+                            <Input label="E-mail" type="email" placeholder="seu@email.com" value={email} onChange={(e) => setEmail(e.target.value)} required />
+                            <Input label="Senha" type="password" placeholder="******" value={password} onChange={(e) => setPassword(e.target.value)} required />
+                            {error && <p className="text-red-500 text-sm mb-4 text-center">{error}</p>}
+                            <Button type="primary" className="w-full mb-3" disabled={loading}>
+                                {loading ? 'Processando...' : (isRegistering ? 'Criar Conta' : 'Entrar')}
+                            </Button>
+                        </form>
+                        <div className="text-center mt-4">
+                            <button onClick={() => { setIsRegistering(!isRegistering); setError(''); }} className="text-sm text-indigo-600 hover:underline">
+                                {isRegistering ? 'Já tem uma conta? Faça Login' : 'Não tem conta? Cadastre-se'}
+                            </button>
+                        </div>
+                    </Card>
+                </div>
+            );
+        };
+
+        // --- COMPONENTES DO DASHBOARD ---
+        const getScoreColor = (score) => {
+            if (score >= 90) return 'text-green-600 bg-green-100';
+            if (score >= 75) return 'text-yellow-600 bg-yellow-100';
+            return 'text-red-600 bg-red-100';
+        };
+
+        const RankingChart = ({ data }) => (
+            <div className="space-y-4">
+                {data.map((f, index) => (
+                    <div key={f.id} className="p-3 bg-gray-50 rounded-lg shadow-sm">
+                        <div className="flex justify-between items-center mb-1">
+                            <span className="text-sm font-medium text-gray-800">{index + 1}. {f.nome}</span>
+                            <span className={`text-xs font-bold px-2 py-0.5 rounded ${getScoreColor(f.scoreGeral)}`}>{f.scoreGeral}%</span>
+                        </div>
+                        <div className="w-full bg-gray-200 rounded-full h-2.5 relative">
+                            <div className={`h-2.5 rounded-full ${f.scoreGeral >= 90 ? 'bg-green-500' : f.scoreGeral >= 75 ? 'bg-yellow-500' : 'bg-red-500'}`} style={{ width: `${f.scoreGeral}%` }}></div>
+                            {f.totalPenalidades > 0 && (
+                                <div className="absolute -top-1 right-0 text-xs text-red-600 font-bold flex items-center"><Flag className="w-3 h-3 mr-1" /> -{f.totalPenalidades}</div>
+                            )}
+                        </div>
+                        <p className="text-xs text-gray-500 mt-1"><span>{f.totalPontosAtribuidos} pts válidos</span></p>
+                    </div>
+                ))}
+            </div>
+        );
+
+        const DashboardContent = ({ cargos, funcionarios, atividadesBase, lancamentos, clientes, bandeiras }) => {
+            const dashboardData = useMemo(() => {
+                const data = funcionarios.map(f => ({
+                    ...f,
+                    cargoNome: cargos.find(c => c.id === f.cargoId)?.nome || 'N/A',
+                    totalPontosAtribuidos: 0, totalPontosMaximos: 0, lancamentosValidados: 0, totalPenalidades: 0, performancePorAtividade: {}
+                }));
+
+                lancamentos.filter(l => l.status === 'Validado').forEach(l => {
+                    const funcIndex = data.findIndex(d => d.id === l.funcionarioId);
+                    if (funcIndex === -1) return;
+                    const atividadeBase = atividadesBase.find(a => a.id === l.atividadeBaseId);
+                    const maxScore = atividadeBase?.pontuacaoMaxima || 1;
+                    const ptsAtribuidos = Number(l.pontuacaoAtribuida || 0);
+                    
+                    data[funcIndex].totalPontosAtribuidos += ptsAtribuidos;
+                    data[funcIndex].totalPontosMaximos += maxScore;
+                    data[funcIndex].lancamentosValidados += 1;
+
+                    const atividadeId = l.atividadeBaseId;
+                    if (!data[funcIndex].performancePorAtividade[atividadeId]) {
+                        data[funcIndex].performancePorAtividade[atividadeId] = { nome: atividadeBase?.nome || 'Desconhecida', ptsAtribuidos: 0, ptsMaximos: 0 };
+                    }
+                    data[funcIndex].performancePorAtividade[atividadeId].ptsAtribuidos += ptsAtribuidos;
+                    data[funcIndex].performancePorAtividade[atividadeId].ptsMaximos += maxScore;
+                });
+
+                bandeiras.forEach(b => {
+                    const funcIndex = data.findIndex(d => d.id === b.funcionarioId);
+                    if (funcIndex !== -1) {
+                        data[funcIndex].totalPenalidades += 1;
+                        data[funcIndex].totalPontosAtribuidos -= 1;
+                    }
+                });
+
+                return data.map(d => {
+                    const pontuacaoFinal = Math.max(0, d.totalPontosAtribuidos);
+                    const score = d.totalPontosMaximos > 0 ? ((pontuacaoFinal / d.totalPontosMaximos) * 100).toFixed(0) : 0;
+                    return { ...d, totalPontosAtribuidos: pontuacaoFinal, scoreGeral: score, performanceAtividades: Object.values(d.performancePorAtividade).map(pa => ({ ...pa, score: pa.ptsMaximos > 0 ? ((pa.ptsAtribuidos / pa.ptsMaximos) * 100).toFixed(0) : 0 })) };
+                }).sort((a, b) => b.scoreGeral - a.scoreGeral);
+            }, [funcionarios, cargos, atividadesBase, lancamentos, clientes, bandeiras]);
+
+            return (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <Card title="Ranking Geral" icon={BarChart3} className="md:col-span-1"><RankingChart data={dashboardData} /></Card>
+                    <Card title="Detalhamento" icon={Users} className="md:col-span-2">
+                        <div className="space-y-6 max-h-[70vh] overflow-y-auto pr-2">
+                            {dashboardData.map(f => (
+                                <div key={f.id} className="p-4 border rounded-xl bg-white shadow-md">
+                                    <div className="flex justify-between items-center mb-3 border-b pb-2">
+                                        <span className="text-xl font-bold text-gray-800">{f.nome} ({f.cargoNome})</span>
+                                        <span className={`text-2xl font-extrabold p-2 rounded-lg ${getScoreColor(f.scoreGeral)}`}>{f.scoreGeral}%</span>
+                                    </div>
+                                    <div className="flex flex-wrap gap-4 text-sm text-gray-600 mb-2">
+                                        <span>Pontos Finais: <span className="font-semibold text-indigo-600">{f.totalPontosAtribuidos}</span> / {f.totalPontosMaximos}</span>
+                                        {f.totalPenalidades > 0 && <span className="text-red-600 font-bold flex items-center bg-red-50 px-2 py-0.5 rounded border border-red-100"><Flag className="w-4 h-4 mr-1" /> {f.totalPenalidades} Bandeira(s)</span>}
+                                    </div>
+                                </div>
+                            ))}
+                            {funcionarios.length === 0 && <div className="text-center p-6 text-gray-500">Nenhum funcionário.</div>}
+                        </div>
+                    </Card>
+                </div>
+            );
+        };
+
+        const CalendarView = ({ db, userId, funcionarios, lancamentos, bandeiras, selectedMonth }) => {
+            const [selectedFuncionarioId, setSelectedFuncionarioId] = useState('');
+            const [flagModalOpen, setFlagModalOpen] = useState(false);
+            const [selectedDate, setSelectedDate] = useState(null);
+            const [flagReason, setFlagReason] = useState('');
+            const [loadingFlag, setLoadingFlag] = useState(false);
+
+            const getDaysInMonth = (year, month) => new Date(year, month + 1, 0).getDate();
+            const getFirstDayOfMonth = (year, month) => new Date(year, month, 1).getDay();
+            const year = parseInt(selectedMonth.split('-')[0]);
+            const month = parseInt(selectedMonth.split('-')[1]) - 1;
+            const daysInMonth = getDaysInMonth(year, month);
+            const firstDay = getFirstDayOfMonth(year, month);
+            const daysArray = Array.from({ length: daysInMonth }, (_, i) => i + 1);
+            const blanksArray = Array.from({ length: firstDay }, (_, i) => i);
+
+            const funcionarioLancamentos = useMemo(() => selectedFuncionarioId ? lancamentos.filter(l => l.funcionarioId === selectedFuncionarioId) : [], [lancamentos, selectedFuncionarioId]);
+            const funcionarioBandeiras = useMemo(() => selectedFuncionarioId ? bandeiras.filter(b => b.funcionarioId === selectedFuncionarioId) : [], [bandeiras, selectedFuncionarioId]);
+
+            const handleDayClick = (day) => {
+                if (!selectedFuncionarioId) return;
+                const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                const existingFlag = funcionarioBandeiras.find(b => b.data === dateStr);
+                if (existingFlag) {
+                    if (window.confirm("Remover bandeira?")) deleteDoc(doc(db, getPublicCollectionPath('bandeiras'), existingFlag.id));
+                } else {
+                    setSelectedDate(dateStr);
+                    setFlagModalOpen(true);
+                }
+            };
+
+            const handleAddFlag = async () => {
+                if (!db || !selectedFuncionarioId || !selectedDate) return;
+                setLoadingFlag(true);
+                try {
+                    await addDoc(collection(db, getPublicCollectionPath('bandeiras')), { funcionarioId: selectedFuncionarioId, data: selectedDate, motivo: flagReason, criadoPor: userId, timestamp: serverTimestamp() });
+                    setFlagModalOpen(false); setFlagReason('');
+                } catch (e) { console.error(e); } finally { setLoadingFlag(false); }
+            };
+
+            return (
+                <div className="space-y-6">
+                    <Card title="Calendário e Penalidades" icon={CalendarIcon}>
+                        <div className="mb-6">
+                            <label className="block text-sm font-medium text-gray-600 mb-2">Selecione o Funcionário</label>
+                            <select value={selectedFuncionarioId} onChange={(e) => setSelectedFuncionarioId(e.target.value)} className="w-full md:w-1/2 px-3 py-2 border border-gray-300 rounded-lg">
+                                <option value="">-- Selecione --</option>
+                                {funcionarios.map(f => <option key={f.id} value={f.id}>{f.nome}</option>)}
+                            </select>
+                        </div>
+                        {selectedFuncionarioId && (
+                            <div className="border rounded-lg overflow-hidden">
+                                <div className="grid grid-cols-7 bg-gray-100 border-b text-center py-2 text-xs text-gray-600">
+                                    {['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'].map(d => <div key={d}>{d}</div>)}
+                                </div>
+                                <div className="grid grid-cols-7 bg-white">
+                                    {blanksArray.map(b => <div key={`blank-${b}`} className="h-20 border-b border-r bg-gray-50"></div>)}
+                                    {daysArray.map(day => {
+                                        const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+                                        const hasLancamento = funcionarioLancamentos.some(l => l.dataConclusao === dateStr);
+                                        const hasFlag = funcionarioBandeiras.find(b => b.data === dateStr);
+                                        return (
+                                            <div key={day} onClick={() => handleDayClick(day)} className="h-20 border-b border-r p-1 cursor-pointer hover:bg-indigo-50">
+                                                <span className={`text-sm ${hasFlag ? 'text-red-600 font-bold' : 'text-gray-700'}`}>{day}</span>
+                                                <div className="flex flex-col gap-1 mt-1">
+                                                    {hasLancamento && <div className="w-2 h-2 bg-green-500 rounded-full mx-auto" title="Demanda"></div>}
+                                                    {hasFlag && <Flag className="w-4 h-4 text-red-500 mx-auto" />}
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        )}
+                    </Card>
+                    {flagModalOpen && (
+                        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+                            <div className="bg-white p-6 rounded-xl w-full max-w-sm">
+                                <h3 className="text-lg font-bold text-red-600 mb-4">Adicionar Bandeira</h3>
+                                <Input label="Motivo" value={flagReason} onChange={(e) => setFlagReason(e.target.value)} />
+                                <div className="flex justify-end space-x-2 mt-4">
+                                    <Button type="secondary" onClick={() => setFlagModalOpen(false)}>Cancelar</Button>
+                                    <Button type="danger" onClick={handleAddFlag} disabled={loadingFlag}>Aplicar</Button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        // --- FORMULÁRIOS DE CADASTRO ---
+        const CargoForm = ({ db, userId, cargos }) => {
+            const [nome, setNome] = useState('');
+            const [editingCargo, setEditingCargo] = useState(null);
+            const handleSubmit = async (e) => {
+                e.preventDefault(); if(!nome.trim()) return;
+                try {
+                    if(editingCargo) await setDoc(doc(db, getPublicCollectionPath('cargos'), editingCargo.id), {...editingCargo, nome: nome.trim()}, {merge:true});
+                    else await addDoc(collection(db, getPublicCollectionPath('cargos')), {nome: nome.trim(), criadoPor: userId, timestamp: serverTimestamp()});
+                    setNome(''); setEditingCargo(null);
+                } catch(e) { console.error(e); }
+            };
+            return (
+                <Card title="Cargos" icon={Briefcase}>
+                    <form onSubmit={handleSubmit} className="mb-4 flex gap-2">
+                        <Input value={nome} onChange={e=>setNome(e.target.value)} placeholder="Nome" required className="flex-1" />
+                        <Button>{editingCargo ? 'OK' : '+'}</Button>
+                    </form>
+                    <ul className="space-y-2 max-h-40 overflow-y-auto">
+                        {cargos.map(c => (
+                            <li key={c.id} className="flex justify-between p-2 bg-gray-50 rounded text-sm">
+                                {c.nome}
+                                <div className="flex gap-1">
+                                    <button onClick={()=> {setEditingCargo(c); setNome(c.nome)}} className="text-blue-600"><Pencil className="w-4 h-4" /></button>
+                                    <button onClick={()=> {if(confirm('Excluir?')) deleteDoc(doc(db, getPublicCollectionPath('cargos'), c.id))}} className="text-red-500"><Trash2 className="w-4 h-4" /></button>
+                                </div>
+                            </li>
+                        ))}
+                    </ul>
+                </Card>
+            );
+        };
+
+        const AtividadeBaseForm = ({ db, userId, cargos, atividadesBase }) => {
+            const [nome, setNome] = useState(''); const [cargoId, setCargoId] = useState(''); const [peso, setPeso] = useState(1);
+            const [editing, setEditing] = useState(null);
+            const handleSubmit = async (e) => {
+                e.preventDefault(); if(!nome || !cargoId) return;
+                const data = { nome, cargoId, pontuacaoMaxima: Number(peso), criadoPor: userId };
+                try {
+                    if(editing) await setDoc(doc(db, getPublicCollectionPath('atividadesBase'), editing.id), data, {merge:true});
+                    else await addDoc(collection(db, getPublicCollectionPath('atividadesBase')), {...data, timestamp: serverTimestamp()});
+                    setNome(''); setCargoId(''); setPeso(1); setEditing(null);
+                } catch(e){console.error(e);}
+            };
+            return (
+                <Card title="Atividades Base" icon={ListTodo}>
+                    <form onSubmit={handleSubmit} className="mb-4">
+                        <Input value={nome} onChange={e=>setNome(e.target.value)} placeholder="Nome" required />
+                        <select value={cargoId} onChange={e=>setCargoId(e.target.value)} className="w-full px-3 py-2 border rounded mb-4" required>
+                            <option value="">Cargo...</option>
+                            {cargos.map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}
+                        </select>
+                        <div className="flex gap-2">
+                            <Input type="number" value={peso} onChange={e=>setPeso(e.target.value)} placeholder="Peso" required />
+                            <Button>{editing ? 'OK' : '+'}</Button>
+                        </div>
+                    </form>
+                    <ul className="space-y-2 max-h-40 overflow-y-auto">
+                        {atividadesBase.map(a => (
+                            <li key={a.id} className="flex justify-between p-2 bg-gray-50 rounded text-sm">
+                                <span>{a.nome} (Max:{a.pontuacaoMaxima})</span>
+                                <div className="flex gap-1">
+                                    <button onClick={()=>{setEditing(a); setNome(a.nome); setCargoId(a.cargoId); setPeso(a.pontuacaoMaxima)}} className="text-blue-600"><Pencil className="w-4 h-4"/></button>
+                                    <button onClick={()=>{if(confirm('Excluir?')) deleteDoc(doc(db, getPublicCollectionPath('atividadesBase'), a.id))}} className="text-red-500"><Trash2 className="w-4 h-4"/></button>
+                                </div>
+                            </li>
+                        ))}
+                    </ul>
+                </Card>
+            );
+        };
+
+        const ClienteForm = ({ db, userId, clientes }) => {
+            const [nome, setNome] = useState('');
+            const [editing, setEditing] = useState(null);
+            const handleSubmit = async (e) => {
+                e.preventDefault(); if(!nome.trim()) return;
+                try {
+                    if(editing) await setDoc(doc(db, getPublicCollectionPath('clientes'), editing.id), { ...editing, nome: nome.trim() }, {merge:true});
+                    else await addDoc(collection(db, getPublicCollectionPath('clientes')), { nome: nome.trim(), criadoPor: userId, timestamp: serverTimestamp() });
+                    setNome(''); setEditing(null);
+                } catch(e){console.error(e);}
+            };
+            return (
+                <Card title="Clientes" icon={Building}>
+                    <form onSubmit={handleSubmit} className="mb-4 flex gap-2">
+                        <Input value={nome} onChange={e=>setNome(e.target.value)} placeholder="Nome" required className="flex-1"/>
+                        <Button>{editing ? 'OK' : '+'}</Button>
+                    </form>
+                    <ul className="space-y-2 max-h-40 overflow-y-auto">
+                        {clientes.map(c => (
+                            <li key={c.id} className="flex justify-between p-2 bg-gray-50 rounded text-sm">
+                                {c.nome}
+                                <div className="flex gap-1">
+                                    <button onClick={()=>{setEditing(c); setNome(c.nome)}} className="text-blue-600"><Pencil className="w-4 h-4"/></button>
+                                    <button onClick={()=>{if(confirm('Excluir?')) deleteDoc(doc(db, getPublicCollectionPath('clientes'), c.id))}} className="text-red-500"><Trash2 className="w-4 h-4"/></button>
+                                </div>
+                            </li>
+                        ))}
+                    </ul>
+                </Card>
+            );
+        };
+
+        const FuncionarioManagement = ({ db, userId, cargos, clientes, funcionarios }) => {
+            const [selUid, setSelUid] = useState('');
+            const [cargoId, setCargoId] = useState('');
+            const [cliIds, setCliIds] = useState([]);
+            const [isAdmin, setIsAdmin] = useState(false);
+
+            const handleSelect = (uid) => {
+                setSelUid(uid);
+                if(!uid) { setCargoId(''); setCliIds([]); setIsAdmin(false); return; }
+                const f = funcionarios.find(u => u.id === uid);
+                if(f) { setCargoId(f.cargoId||''); setCliIds(f.clienteIds||[]); setIsAdmin(f.isAdmin||false); }
+            };
+
+            const toggleCli = (id) => setCliIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+
+            const handleSave = async () => {
+                if(!selUid) return;
+                try {
+                    await setDoc(doc(db, getPublicCollectionPath('funcionarios'), selUid), { cargoId, clienteIds: cliIds, isAdmin }, {merge:true});
+                    alert("Salvo!");
+                } catch(e){ console.error(e); }
+            };
+
+            return (
+                <Card title="Gestão de Usuários" icon={Users}>
+                    <div className="mb-4">
+                        <label className="block text-sm text-gray-600">Usuário</label>
+                        <select value={selUid} onChange={e=>handleSelect(e.target.value)} className="w-full px-3 py-2 border rounded">
+                            <option value="">Selecione...</option>
+                            {funcionarios.map(f=><option key={f.id} value={f.id}>{f.nome} ({f.email})</option>)}
+                        </select>
+                    </div>
+                    {selUid && (
+                        <div className="space-y-4 pt-4 border-t">
+                            <label className="flex items-center gap-2"><input type="checkbox" checked={isAdmin} onChange={e=>setIsAdmin(e.target.checked)} /> Administrador</label>
+                            <div>
+                                <label className="block text-sm text-gray-600">Cargo</label>
+                                <select value={cargoId} onChange={e=>setCargoId(e.target.value)} className="w-full px-3 py-2 border rounded">
+                                    <option value="">Sem Cargo</option>
+                                    {cargos.map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}
+                                </select>
+                            </div>
+                            <div>
+                                <label className="block text-sm text-gray-600">Clientes</label>
+                                <div className="max-h-32 overflow-y-auto border p-2 rounded bg-gray-50">
+                                    {clientes.map(c => (
+                                        <div key={c.id} className="flex items-center gap-2">
+                                            <input type="checkbox" checked={cliIds.includes(c.id)} onChange={()=>toggleCli(c.id)} />
+                                            {c.nome}
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                            <Button onClick={handleSave}>Salvar Permissões</Button>
+                        </div>
+                    )}
+                </Card>
+            );
+        };
+
+        const ValidacaoLancamento = ({ db, userId, lancamentos, atividadesBase, funcionarios }) => {
+            const pendentes = useMemo(() => lancamentos.filter(l => l.status === 'Pendente'), [lancamentos]);
+            const [scoreMap, setScoreMap] = useState({});
+            const [loadingMap, setLoadingMap] = useState({});
+
+            useEffect(() => {
+                const map = {};
+                pendentes.forEach(l => { if (scoreMap[l.id] === undefined) map[l.id] = (atividadesBase.find(a => a.id === l.atividadeBaseId)?.pontuacaoMaxima || 1); });
+                setScoreMap(prev => ({ ...prev, ...map }));
+            }, [pendentes, atividadesBase]);
+
+            const handleVal = async (l) => {
+                setLoadingMap(p=>({...p, [l.id]: true}));
+                try {
+                    await setDoc(doc(db, getPublicCollectionPath('lancamentos'), l.id), { status: 'Validado', pontuacaoAtribuida: scoreMap[l.id], validadorId: userId }, {merge:true});
+                } catch(e){console.error(e);} finally { setLoadingMap(p=>({...p, [l.id]: false})); }
+            };
+
+            if (pendentes.length === 0) return <div className="text-center p-6 bg-yellow-50 rounded text-yellow-800">Nenhum lançamento pendente.</div>;
+
+            return (
+                <div className="space-y-4">
+                    {pendentes.map(l => {
+                        const atv = atividadesBase.find(a => a.id === l.atividadeBaseId) || {};
+                        const func = funcionarios.find(f => f.id === l.funcionarioId) || {};
+                        return (
+                            <Card key={l.id} className="flex justify-between items-center">
+                                <div>
+                                    <p className="font-bold text-indigo-600">{atv.nome}</p>
+                                    <p className="text-sm">{func.nome}</p>
+                                    <p className="text-xs text-gray-500">{formatDate(l.dataConclusao)}</p>
+                                </div>
+                                <div className="flex gap-2 items-center">
+                                    <Input type="number" value={scoreMap[l.id]||0} onChange={e=>setScoreMap(p=>({...p, [l.id]: e.target.value}))} className="w-20 text-center mb-0"/>
+                                    <Button onClick={()=>handleVal(l)} disabled={loadingMap[l.id]} icon={Check}>OK</Button>
+                                </div>
+                            </Card>
+                        );
+                    })}
+                </div>
+            );
+        };
+
+        const AdminView = ({ db, userId, cargos, funcionarios, atividadesBase, lancamentos, clientes, bandeiras, onLogout, selectedMonth, setSelectedMonth }) => {
+            const [tab, setTab] = useState('dashboard');
+            return (
+                <div className="p-6 min-h-screen">
+                    <header className="flex flex-col md:flex-row justify-between items-center mb-6 pb-4 border-b">
+                        <h1 className="text-3xl font-extrabold text-indigo-800 flex items-center"><Settings className="mr-3"/> Admin</h1>
+                        <div className="flex gap-4 items-center">
+                            <MonthSelector selectedMonth={selectedMonth} setSelectedMonth={setSelectedMonth} />
+                            <Button onClick={onLogout} type="secondary" icon={LogOut}>Sair</Button>
+                        </div>
+                    </header>
+                    <div className="flex gap-2 mb-6 overflow-x-auto pb-2">
+                        {[
+                            { id: 'dashboard', icon: BarChart3, label: 'Dashboard' },
+                            { id: 'calendario', icon: CalendarIcon, label: 'Calendário' },
+                            { id: 'validacao', icon: ClipboardList, label: 'Validação' },
+                            { id: 'usuarios', icon: Users, label: 'Funcionários' },
+                            { id: 'cadastros', icon: Briefcase, label: 'Cadastros' },
+                        ].map(t => (
+                            <button key={t.id} onClick={() => setTab(t.id)} className={`px-4 py-2 rounded-lg flex items-center whitespace-nowrap ${tab === t.id ? 'bg-indigo-600 text-white' : 'bg-white text-gray-600'}`}>
+                                <t.icon className="w-4 h-4 mr-2" /> {t.label}
+                            </button>
+                        ))}
+                    </div>
+                    {tab === 'dashboard' && <DashboardContent cargos={cargos} funcionarios={funcionarios} atividadesBase={atividadesBase} lancamentos={lancamentos} clientes={clientes} bandeiras={bandeiras} />}
+                    {tab === 'calendario' && <CalendarView db={db} userId={userId} funcionarios={funcionarios} lancamentos={lancamentos} bandeiras={bandeiras} selectedMonth={selectedMonth} />}
+                    {tab === 'validacao' && <ValidacaoLancamento db={db} userId={userId} lancamentos={lancamentos} atividadesBase={atividadesBase} funcionarios={funcionarios} />}
+                    {tab === 'usuarios' && <FuncionarioManagement db={db} userId={userId} cargos={cargos} clientes={clientes} funcionarios={funcionarios} />}
+                    {tab === 'cadastros' && (
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                            <CargoForm db={db} userId={userId} cargos={cargos} />
+                            <AtividadeBaseForm db={db} userId={userId} cargos={cargos} atividadesBase={atividadesBase} />
+                            <ClienteForm db={db} userId={userId} clientes={clientes} />
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const EditLancamentoModal = ({ db, lancamento, onClose, atividadesDoCargo, clientesDoFuncionario }) => {
+            const [selAtv, setSelAtv] = useState(lancamento.atividadeBaseId);
+            const [selCli, setSelCli] = useState(lancamento.clienteId || '');
+            const [desc, setDesc] = useState(lancamento.descricao);
+            const [date, setDate] = useState(lancamento.dataConclusao);
+            
+            const handleSave = async (e) => {
+                e.preventDefault();
+                try {
+                    await setDoc(doc(db, getPublicCollectionPath('lancamentos'), lancamento.id), {
+                        atividadeBaseId: selAtv, clienteId: selCli, descricao: desc, dataConclusao: date
+                    }, {merge:true});
+                    onClose();
+                } catch(e){console.error(e);}
+            };
+
+            return (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50">
+                    <div className="bg-white p-6 rounded-xl w-full max-w-lg relative">
+                        <button onClick={onClose} className="absolute top-3 right-3 text-gray-400"><X/></button>
+                        <h2 className="text-xl font-bold mb-4">Editar</h2>
+                        <form onSubmit={handleSave}>
+                            <div className="mb-4">
+                                <label className="block text-sm text-gray-600">Cliente</label>
+                                <select value={selCli} onChange={e=>setSelCli(e.target.value)} className="w-full px-3 py-2 border rounded">
+                                    <option value="">Selecione...</option>
+                                    {clientesDoFuncionario?.map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}
+                                </select>
+                            </div>
+                            <div className="mb-4">
+                                <label className="block text-sm text-gray-600">Atividade</label>
+                                <select value={selAtv} onChange={e=>setSelAtv(e.target.value)} className="w-full px-3 py-2 border rounded" required>
+                                    <option value="">Selecione...</option>
+                                    {atividadesDoCargo?.map(a=><option key={a.id} value={a.id}>{a.nome}</option>)}
+                                </select>
+                            </div>
+                            <Input type="date" value={date} onChange={e=>setDate(e.target.value)} required />
+                            <textarea value={desc} onChange={e=>setDesc(e.target.value)} className="w-full px-3 py-2 border rounded mb-4" rows="3"></textarea>
+                            <Button>Salvar</Button>
+                        </form>
+                    </div>
+                </div>
+            );
+        };
+
+        const LancarAtividade = ({ db, userId, funcionario, atividadesBase, lancamentos, clientes }) => {
+            const [selAtv, setSelAtv] = useState('');
+            const [selCli, setSelCli] = useState('');
+            const [desc, setDesc] = useState('');
+            const [date, setDate] = useState('');
+            const [editL, setEditL] = useState(null);
+
+            const atvs = useMemo(() => funcionario ? atividadesBase.filter(a => a.cargoId === funcionario.cargoId) : [], [atividadesBase, funcionario]);
+            const clis = useMemo(() => funcionario && funcionario.clienteIds ? clientes.filter(c => funcionario.clienteIds.includes(c.id)) : [], [clientes, funcionario]);
+            const meusLancs = useMemo(() => lancamentos.filter(l => l.funcionarioId === userId).sort((a,b) => (b.dataLancamento?.toDate()||0) - (a.dataLancamento?.toDate()||0)), [lancamentos, userId]);
+
+            const handleSubmit = async (e) => {
+                e.preventDefault();
+                try {
+                    await addDoc(collection(db, getPublicCollectionPath('lancamentos')), {
+                        funcionarioId: userId, atividadeBaseId: selAtv, clienteId: selCli, descricao: desc, dataConclusao: date,
+                        dataLancamento: serverTimestamp(), status: 'Pendente', pontuacaoAtribuida: 0
+                    });
+                    setDesc(''); setSelAtv(''); setSelCli(''); setDate('');
+                } catch(e){console.error(e);}
+            };
+
+            return (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <Card title="Lançamento" icon={Plus}>
+                        <form onSubmit={handleSubmit}>
+                            <div className="mb-4">
+                                <label className="block text-sm text-gray-600">Cliente</label>
+                                <select value={selCli} onChange={e=>setSelCli(e.target.value)} className="w-full px-3 py-2 border rounded">
+                                    <option value="">Selecione (Opcional)</option>
+                                    {clis.map(c=><option key={c.id} value={c.id}>{c.nome}</option>)}
+                                </select>
+                            </div>
+                            <div className="mb-4">
+                                <label className="block text-sm text-gray-600">Atividade</label>
+                                <select value={selAtv} onChange={e=>setSelAtv(e.target.value)} className="w-full px-3 py-2 border rounded" required>
+                                    <option value="">Selecione</option>
+                                    {atvs.map(a=><option key={a.id} value={a.id}>{a.nome}</option>)}
+                                </select>
+                            </div>
+                            <Input type="date" value={date} onChange={e=>setDate(e.target.value)} required />
+                            <textarea value={desc} onChange={e=>setDesc(e.target.value)} className="w-full px-3 py-2 border rounded mb-4" placeholder="Detalhes..."></textarea>
+                            <Button>Lançar</Button>
+                        </form>
+                    </Card>
+                    <Card title="Histórico" icon={ClipboardList} className="md:col-span-2">
+                        <div className="space-y-2 max-h-80 overflow-y-auto">
+                            {meusLancs.map(l => (
+                                <div key={l.id} className="p-3 border rounded bg-gray-50 flex justify-between items-center">
+                                    <div>
+                                        <span className="font-bold">{atividadesBase.find(a => a.id === l.atividadeBaseId)?.nome || '?'}</span>
+                                        <span className="text-xs ml-2 px-2 py-1 rounded bg-white border">{l.status}</span>
+                                        <p className="text-xs text-gray-500">{formatDate(l.dataConclusao)}</p>
+                                    </div>
+                                    {l.status === 'Pendente' && (
+                                        <div className="flex gap-1">
+                                            <button onClick={()=>setEditL(l)} className="text-blue-600"><Pencil className="w-4 h-4"/></button>
+                                            <button onClick={()=>deleteDoc(doc(db, getPublicCollectionPath('lancamentos'), l.id))} className="text-red-500"><Trash2 className="w-4 h-4"/></button>
+                                        </div>
+                                    )}
+                                </div>
+                            ))}
+                        </div>
+                    </Card>
+                    {editL && <EditLancamentoModal db={db} lancamento={editL} onClose={()=>setEditL(null)} atividadesDoCargo={atvs} clientesDoFuncionario={clis} />}
+                </div>
+            );
+        };
+
+        const EmployeeView = ({ db, userId, funcionario, cargos, atividadesBase, lancamentos, clientes, bandeiras, onLogout, selectedMonth, setSelectedMonth }) => {
+            const cargoNome = useMemo(() => cargos.find(c => c.id === funcionario?.cargoId)?.nome || 'N/A', [cargos, funcionario]);
+            const minhasBandeiras = useMemo(() => bandeiras.filter(b => b.funcionarioId === userId && (!selectedMonth || b.data.startsWith(selectedMonth))), [bandeiras, userId, selectedMonth]);
+
+            return (
+                <div className="p-6 min-h-screen">
+                    <header className="flex justify-between items-center mb-6">
+                        <h1 className="text-2xl font-bold text-indigo-800 flex items-center"><User className="mr-2"/> Olá, {funcionario?.nome}</h1>
+                        <div className="flex gap-4 items-center">
+                            <MonthSelector selectedMonth={selectedMonth} setSelectedMonth={setSelectedMonth} />
+                            <Button onClick={onLogout} type="secondary" icon={LogOut}>Sair</Button>
+                        </div>
+                    </header>
+                    <div className="mb-6">
+                        <Card className="bg-indigo-100 border-indigo-200">
+                            <p className="text-indigo-800 font-semibold">Cargo: {cargoNome}</p>
+                            {minhasBandeiras.length > 0 && (
+                                <div className="mt-4 bg-red-100 border border-red-300 p-3 rounded text-red-800 font-bold flex items-center">
+                                    <AlertTriangle className="w-4 h-4 mr-2"/> Você tem {minhasBandeiras.length} bandeira(s) neste mês.
+                                </div>
+                            )}
+                        </Card>
+                    </div>
+                    <LancarAtividade db={db} userId={userId} funcionario={funcionario} atividadesBase={atividadesBase} lancamentos={lancamentos} clientes={clientes} />
+                </div>
+            );
+        };
+
+        // --- APP ROOT ---
+        const App = () => {
+            const [user, setUser] = useState(null);
+            const [profile, setProfile] = useState(null);
+            const [loading, setLoading] = useState(true);
+            const [selMonth, setSelMonth] = useState(new Date().toISOString().substring(0, 7));
+
+            const [cargos, setCargos] = useState([]);
+            const [atividades, setAtividades] = useState([]);
+            const [funcs, setFuncs] = useState([]);
+            const [lancs, setLancs] = useState([]);
+            const [clis, setClis] = useState([]);
+            const [flags, setFlags] = useState([]);
+
+            useEffect(() => {
+                return onAuthStateChanged(auth, u => {
+                    setUser(u);
+                    if(!u) { setProfile(null); setLoading(false); }
+                });
+            }, []);
+
+            useEffect(() => {
+                if(user) {
+                    const unsubP = onSnapshot(doc(db, getPublicCollectionPath('funcionarios'), user.uid), d => {
+                        if(d.exists()) setProfile(d.data());
+                        else setProfile({id: user.uid, nome: user.email, isAdmin: false});
+                        setLoading(false);
+                    });
+                    const uC = onSnapshot(query(collection(db, getPublicCollectionPath('cargos'))), s => setCargos(s.docs.map(d=>({id:d.id, ...d.data()}))));
+                    const uA = onSnapshot(query(collection(db, getPublicCollectionPath('atividadesBase'))), s => setAtividades(s.docs.map(d=>({id:d.id, ...d.data()}))));
+                    const uF = onSnapshot(query(collection(db, getPublicCollectionPath('funcionarios'))), s => setFuncs(s.docs.map(d=>({id:d.id, ...d.data()}))));
+                    const uL = onSnapshot(query(collection(db, getPublicCollectionPath('lancamentos'))), s => setLancs(s.docs.map(d=>({id:d.id, ...d.data()}))));
+                    const uCl = onSnapshot(query(collection(db, getPublicCollectionPath('clientes'))), s => setClis(s.docs.map(d=>({id:d.id, ...d.data()}))));
+                    const uFl = onSnapshot(query(collection(db, getPublicCollectionPath('bandeiras'))), s => setFlags(s.docs.map(d=>({id:d.id, ...d.data()}))));
+                    return () => { unsubP(); uC(); uA(); uF(); uL(); uCl(); uFl(); }
+                }
+            }, [user]);
+
+            const filteredLancs = useMemo(() => lancs.filter(l => !l.dataConclusao || l.dataConclusao.startsWith(selMonth)), [lancs, selMonth]);
+            const filteredFlags = useMemo(() => flags.filter(f => !f.data || f.data.startsWith(selMonth)), [flags, selMonth]);
+
+            if(loading) return <div className="flex h-screen items-center justify-center">Carregando...</div>;
+            if(!user) return <LoginScreen />;
+
+            if(profile?.isAdmin) return <AdminView db={db} userId={user.uid} cargos={cargos} funcionarios={funcs} atividadesBase={atividades} lancamentos={filteredLancs} clientes={clis} bandeiras={filteredFlags} onLogout={()=>signOut(auth)} selectedMonth={selMonth} setSelectedMonth={setSelMonth} />;
+            
+            return <EmployeeView db={db} userId={user.uid} funcionario={profile} cargos={cargos} atividadesBase={atividades} lancamentos={filteredLancs} clientes={clis} bandeiras={filteredFlags} onLogout={()=>signOut(auth)} selectedMonth={selMonth} setSelectedMonth={setSelMonth} />;
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
