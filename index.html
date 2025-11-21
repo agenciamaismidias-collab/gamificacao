@@ -48,7 +48,7 @@
             Settings, Users, Briefcase, ListTodo, ClipboardList, Zap, 
             BarChart3, User, LogOut, ArrowLeft, Plus, Check, Building, 
             Trash2, Pencil, X, Calendar as CalendarIcon, Flag, AlertTriangle, 
-            Lock, Mail, ChevronLeft, ChevronRight
+            Lock, Mail, ChevronLeft, ChevronRight, ShieldCheck, UserCircle
         } from "https://esm.sh/lucide-react@0.292.0";
 
         const React = window.React;
@@ -60,10 +60,10 @@
         // --- CONFIGURAÇÃO GERAL ---
         const appId = 'sistema-avaliacao-pautas';
         
-        // LISTA DE SUPER ADMINS (E-mails que sempre terão acesso total)
+        // LISTA DE SUPER ADMINS (E-mails que sempre terão acesso total, independente do banco)
         const SUPER_ADMINS = ['sabrinacruz.mkt@gmail.com'];
 
-        // Configuração do Firebase (Atualizada com suas chaves)
+        // Configuração do Firebase
         const firebaseConfig = {
             apiKey: "AIzaSyBZ76yd8RbRQVjbJ115QqL3oDztxedq0OY",
             authDomain: "agmm-16a91.firebaseapp.com",
@@ -157,14 +157,30 @@
             </div>
         );
 
-        // --- TELA DE LOGIN ---
-        const LoginScreen = () => {
+        // --- TELA DE LOGIN UNIFICADA ---
+        const LoginScreen = ({ setTargetRole }) => {
+            const [step, setStep] = useState(1); // 1: Seleção, 2: Login
+            const [role, setRole] = useState(null); // 'admin' ou 'employee'
             const [isRegistering, setIsRegistering] = useState(false);
             const [email, setEmail] = useState('');
             const [password, setPassword] = useState('');
             const [name, setName] = useState('');
             const [error, setError] = useState('');
             const [loading, setLoading] = useState(false);
+
+            const handleRoleSelect = (selectedRole) => {
+                setRole(selectedRole);
+                setTargetRole(selectedRole); // Comunica a escolha para o App
+                setStep(2);
+                setError('');
+            };
+
+            const handleBack = () => {
+                setStep(1);
+                setRole(null);
+                setTargetRole(null);
+                setError('');
+            };
 
             const handleAuth = async (e) => {
                 e.preventDefault();
@@ -175,7 +191,6 @@
                     if (isRegistering) {
                         const userCredential = await createUserWithEmailAndPassword(auth, email, password);
                         const user = userCredential.user;
-                        // Se o email for do super admin, já cria como admin true
                         const isSuper = SUPER_ADMINS.includes(email);
                         
                         await setDoc(doc(db, getPublicCollectionPath('funcionarios'), user.uid), {
@@ -190,6 +205,7 @@
                     } else {
                         await signInWithEmailAndPassword(auth, email, password);
                     }
+                    // O fluxo segue no onAuthStateChanged do componente App
                 } catch (err) {
                     console.error("Erro de autenticação:", err);
                     let msg = "Erro ao autenticar: " + err.message;
@@ -197,21 +213,61 @@
                     if (err.code === 'auth/weak-password') msg = "A senha deve ter pelo menos 6 caracteres.";
                     if (err.code === 'auth/invalid-credential') msg = "E-mail ou senha incorretos.";
                     setError(msg);
-                } finally {
                     setLoading(false);
                 }
             };
 
+            if (step === 1) {
+                return (
+                    <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-indigo-50 to-blue-100 p-4">
+                        <div className="text-center mb-10">
+                            <h1 className="text-4xl font-extrabold text-indigo-900 mb-2">Bem-vindo ao SAP</h1>
+                            <p className="text-lg text-gray-600">Sistema de Avaliação de Pautas</p>
+                        </div>
+                        
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 max-w-4xl w-full">
+                            {/* Card Administrador */}
+                            <div 
+                                onClick={() => handleRoleSelect('admin')}
+                                className="bg-white p-8 rounded-2xl shadow-xl cursor-pointer transform transition hover:-translate-y-2 hover:shadow-2xl border-2 border-transparent hover:border-indigo-500 flex flex-col items-center text-center group"
+                            >
+                                <div className="bg-indigo-100 p-4 rounded-full mb-6 group-hover:bg-indigo-200 transition">
+                                    <ShieldCheck className="w-12 h-12 text-indigo-600" />
+                                </div>
+                                <h2 className="text-2xl font-bold text-gray-800 mb-2">Sou Administrador</h2>
+                                <p className="text-gray-500">Gerencie pautas, valide entregas e acompanhe relatórios.</p>
+                            </div>
+
+                            {/* Card Funcionário */}
+                            <div 
+                                onClick={() => handleRoleSelect('employee')}
+                                className="bg-white p-8 rounded-2xl shadow-xl cursor-pointer transform transition hover:-translate-y-2 hover:shadow-2xl border-2 border-transparent hover:border-green-500 flex flex-col items-center text-center group"
+                            >
+                                <div className="bg-green-100 p-4 rounded-full mb-6 group-hover:bg-green-200 transition">
+                                    <UserCircle className="w-12 h-12 text-green-600" />
+                                </div>
+                                <h2 className="text-2xl font-bold text-gray-800 mb-2">Sou Funcionário</h2>
+                                <p className="text-gray-500">Lance suas atividades e veja seu desempenho.</p>
+                            </div>
+                        </div>
+                    </div>
+                );
+            }
+
             return (
                 <div className="min-h-screen flex items-center justify-center bg-indigo-50 p-4">
-                    <Card className="w-full max-w-md">
-                        <div className="text-center mb-6">
-                            <div className="bg-indigo-100 p-3 rounded-full w-16 h-16 flex items-center justify-center mx-auto mb-4">
-                                <Lock className="w-8 h-8 text-indigo-600" />
+                    <Card className="w-full max-w-md relative">
+                        <button onClick={handleBack} className="absolute top-4 left-4 text-gray-400 hover:text-gray-600 flex items-center text-sm">
+                            <ArrowLeft className="w-4 h-4 mr-1" /> Voltar
+                        </button>
+                        <div className="text-center mb-6 mt-6">
+                            <div className={`p-3 rounded-full w-16 h-16 flex items-center justify-center mx-auto mb-4 ${role === 'admin' ? 'bg-indigo-100' : 'bg-green-100'}`}>
+                                {role === 'admin' ? <ShieldCheck className="w-8 h-8 text-indigo-600" /> : <UserCircle className="w-8 h-8 text-green-600" />}
                             </div>
-                            <h1 className="text-2xl font-bold text-gray-800">Sistema de Pautas</h1>
-                            <p className="text-gray-500 text-sm mt-1">Acesse sua conta para continuar</p>
+                            <h1 className="text-2xl font-bold text-gray-800">Acesso {role === 'admin' ? 'Administrativo' : 'Funcionário'}</h1>
+                            <p className="text-gray-500 text-sm mt-1">Entre com suas credenciais</p>
                         </div>
+
                         <form onSubmit={handleAuth}>
                             {isRegistering && (
                                 <Input label="Nome Completo" placeholder="Ex: João Silva" value={name} onChange={(e) => setName(e.target.value)} required />
@@ -219,12 +275,12 @@
                             <Input label="E-mail" type="email" placeholder="seu@email.com" value={email} onChange={(e) => setEmail(e.target.value)} required />
                             <Input label="Senha" type="password" placeholder="******" value={password} onChange={(e) => setPassword(e.target.value)} required />
                             {error && <p className="text-red-500 text-sm mb-4 text-center">{error}</p>}
-                            <Button type="primary" className="w-full mb-3" disabled={loading}>
+                            <Button type="primary" className={`w-full mb-3 ${role === 'admin' ? 'bg-indigo-600 hover:bg-indigo-700' : 'bg-green-600 hover:bg-green-700'}`} disabled={loading}>
                                 {loading ? 'Processando...' : (isRegistering ? 'Criar Conta' : 'Entrar')}
                             </Button>
                         </form>
                         <div className="text-center mt-4">
-                            <button onClick={() => { setIsRegistering(!isRegistering); setError(''); }} className="text-sm text-indigo-600 hover:underline">
+                            <button onClick={() => { setIsRegistering(!isRegistering); setError(''); }} className="text-sm text-gray-500 hover:text-gray-800 hover:underline">
                                 {isRegistering ? 'Já tem uma conta? Faça Login' : 'Não tem conta? Cadastre-se'}
                             </button>
                         </div>
@@ -233,7 +289,8 @@
             );
         };
 
-        // --- COMPONENTES DO DASHBOARD ---
+        // ... (Demais componentes: getScoreColor, RankingChart, DashboardContent, CalendarView, Forms, etc. mantidos iguais) ...
+        
         const getScoreColor = (score) => {
             if (score >= 90) return 'text-green-600 bg-green-100';
             if (score >= 75) return 'text-yellow-600 bg-yellow-100';
@@ -417,7 +474,6 @@
             );
         };
 
-        // --- FORMULÁRIOS DE CADASTRO ---
         const CargoForm = ({ db, userId, cargos }) => {
             const [nome, setNome] = useState('');
             const [editingCargo, setEditingCargo] = useState(null);
@@ -749,7 +805,7 @@
                                     {atvs.map(a=><option key={a.id} value={a.id}>{a.nome}</option>)}
                                 </select>
                             </div>
-                            <Input type="date" value={date} onChange={e=>setDate(e.target.value)} required />
+                            <Input type="date" value={date} onChange={e=>setDate(e.target.value)} required label="Data" />
                             <textarea value={desc} onChange={e=>setDesc(e.target.value)} className="w-full px-3 py-2 border rounded mb-4" placeholder="Detalhes..."></textarea>
                             <Button>Lançar</Button>
                         </form>
@@ -810,9 +866,11 @@
         const App = () => {
             const [user, setUser] = useState(null);
             const [profile, setProfile] = useState(null);
-            const [loading, setLoading] = useState(true);
-            const [selMonth, setSelMonth] = useState(new Date().toISOString().substring(0, 7));
+            const [loadingAuth, setLoadingAuth] = useState(true);
+            const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().substring(0, 7));
+            const [targetRole, setTargetRole] = useState(null); // 'admin' ou 'employee' selecionado no login
 
+            // Data States
             const [cargos, setCargos] = useState([]);
             const [atividades, setAtividades] = useState([]);
             const [funcs, setFuncs] = useState([]);
@@ -823,36 +881,71 @@
             useEffect(() => {
                 return onAuthStateChanged(auth, u => {
                     setUser(u);
-                    if(!u) { setProfile(null); setLoading(false); }
+                    if(!u) { setProfile(null); setLoadingAuth(false); setTargetRole(null); }
                 });
             }, []);
 
             useEffect(() => {
                 if(user) {
                     const unsubP = onSnapshot(doc(db, getPublicCollectionPath('funcionarios'), user.uid), d => {
-                        if(d.exists()) setProfile(d.data());
-                        else setProfile({id: user.uid, nome: user.email, isAdmin: false});
-                        setLoading(false);
+                        if(d.exists()) {
+                            const data = d.data();
+                            // FORÇA SUPER ADMIN A SER ADMIN
+                            if (SUPER_ADMINS.includes(data.email)) {
+                                data.isAdmin = true;
+                            }
+                            setProfile(data);
+                        } else {
+                            // Fallback + verificação de super admin
+                            const isSuper = SUPER_ADMINS.includes(user.email);
+                            setProfile({ id: user.uid, nome: user.email, isAdmin: isSuper });
+                        }
+                        setLoadingAuth(false);
                     });
+
                     const uC = onSnapshot(query(collection(db, getPublicCollectionPath('cargos'))), s => setCargos(s.docs.map(d=>({id:d.id, ...d.data()}))));
                     const uA = onSnapshot(query(collection(db, getPublicCollectionPath('atividadesBase'))), s => setAtividades(s.docs.map(d=>({id:d.id, ...d.data()}))));
                     const uF = onSnapshot(query(collection(db, getPublicCollectionPath('funcionarios'))), s => setFuncs(s.docs.map(d=>({id:d.id, ...d.data()}))));
                     const uL = onSnapshot(query(collection(db, getPublicCollectionPath('lancamentos'))), s => setLancs(s.docs.map(d=>({id:d.id, ...d.data()}))));
                     const uCl = onSnapshot(query(collection(db, getPublicCollectionPath('clientes'))), s => setClis(s.docs.map(d=>({id:d.id, ...d.data()}))));
                     const uFl = onSnapshot(query(collection(db, getPublicCollectionPath('bandeiras'))), s => setFlags(s.docs.map(d=>({id:d.id, ...d.data()}))));
+                    
                     return () => { unsubP(); uC(); uA(); uF(); uL(); uCl(); uFl(); }
                 }
             }, [user]);
 
-            const filteredLancs = useMemo(() => lancs.filter(l => !l.dataConclusao || l.dataConclusao.startsWith(selMonth)), [lancs, selMonth]);
-            const filteredFlags = useMemo(() => flags.filter(f => !f.data || f.data.startsWith(selMonth)), [flags, selMonth]);
+            const handleLogout = () => {
+                signOut(auth);
+                setTargetRole(null);
+            };
 
-            if(loading) return <div className="flex h-screen items-center justify-center">Carregando...</div>;
-            if(!user) return <LoginScreen />;
+            const filteredLancs = useMemo(() => lancs.filter(l => !l.dataConclusao || l.dataConclusao.startsWith(selectedMonth)), [lancs, selectedMonth]);
+            const filteredFlags = useMemo(() => flags.filter(f => !f.data || f.data.startsWith(selectedMonth)), [flags, selectedMonth]);
 
-            if(profile?.isAdmin) return <AdminView db={db} userId={user.uid} cargos={cargos} funcionarios={funcs} atividadesBase={atividades} lancamentos={filteredLancs} clientes={clis} bandeiras={filteredFlags} onLogout={()=>signOut(auth)} selectedMonth={selMonth} setSelectedMonth={setSelMonth} />;
+            if(loadingAuth) return <div className="flex h-screen items-center justify-center text-indigo-600 text-xl font-bold">Carregando Sistema...</div>;
+
+            // Se não estiver logado, mostra a tela de login unificada
+            if(!user) return <LoginScreen setTargetRole={setTargetRole} />;
+
+            // VERIFICAÇÃO DE SEGURANÇA DO PAPEL ESCOLHIDO
+            if (targetRole === 'admin' && !profile?.isAdmin) {
+                return (
+                    <div className="flex h-screen flex-col items-center justify-center bg-red-50 text-center p-6">
+                        <div className="bg-red-100 p-4 rounded-full mb-4"><AlertTriangle className="w-12 h-12 text-red-600" /></div>
+                        <h1 className="text-2xl font-bold text-red-700 mb-2">Acesso Negado</h1>
+                        <p className="text-gray-600 mb-6">Você tentou entrar como Administrador, mas sua conta não possui privilégios suficientes.</p>
+                        <Button onClick={handleLogout} type="danger">Voltar ao Login</Button>
+                    </div>
+                );
+            }
+
+            // Se passou na verificação ou é funcionário, renderiza a tela apropriada
+            if(targetRole === 'admin' && profile?.isAdmin) {
+                return <AdminView db={db} userId={user.uid} cargos={cargos} funcionarios={funcs} atividadesBase={atividades} lancamentos={filteredLancs} clientes={clis} bandeiras={filteredFlags} onLogout={handleLogout} selectedMonth={selectedMonth} setSelectedMonth={setSelectedMonth} />;
+            }
             
-            return <EmployeeView db={db} userId={user.uid} funcionario={profile} cargos={cargos} atividadesBase={atividades} lancamentos={filteredLancs} clientes={clis} bandeiras={filteredFlags} onLogout={()=>signOut(auth)} selectedMonth={selMonth} setSelectedMonth={setSelMonth} />;
+            // Default para funcionário ou se não houver targetRole definido (login direto)
+            return <EmployeeView db={db} userId={user.uid} funcionario={profile} cargos={cargos} atividadesBase={atividades} lancamentos={filteredLancs} clientes={clis} bandeiras={filteredFlags} onLogout={handleLogout} selectedMonth={selectedMonth} setSelectedMonth={setSelectedMonth} />;
         };
 
         const root = ReactDOM.createRoot(document.getElementById('root'));
